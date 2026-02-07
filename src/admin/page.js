@@ -149,7 +149,10 @@ label{display:block;margin-bottom:6px;font-size:13px;color:var(--text-1);font-we
         <h3>Quick Start</h3>
         <p>1. Go to <strong>Channels</strong> and add an upstream API service with keys</p>
         <p>2. Go to <strong>API Keys</strong> and generate a client key</p>
-        <p>3. Point your AI client to: <code id="proxy-url"></code></p>
+        <p>3. Point your AI client to one of the endpoints below:</p>
+        <p style="margin-top:8px"><strong>OpenAI format:</strong> <code id="proxy-url"></code></p>
+        <p><strong>Claude format:</strong> <code id="proxy-url-claude"></code></p>
+        <div class="form-help" style="margin-top:8px">Claude endpoint accepts <code>x-api-key</code> or <code>Authorization: Bearer</code> header for authentication.</div>
       </div>
     </section>
 
@@ -292,6 +295,7 @@ function renderDashboard() {
   document.getElementById('s-uk').textContent = uk;
   document.getElementById('s-ak').textContent = apiKeys.length;
   document.getElementById('proxy-url').textContent = location.origin + '/v1';
+  document.getElementById('proxy-url-claude').textContent = location.origin + '/v1/messages';
 }
 
 // ============ Channels ============
@@ -529,6 +533,7 @@ document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal()
     showLogin();
   }
   document.getElementById('proxy-url').textContent = location.origin + '/v1';
+  document.getElementById('proxy-url-claude').textContent = location.origin + '/v1/messages';
 })();
 </script>
 </body>

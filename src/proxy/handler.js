@@ -1,5 +1,6 @@
 import { verifyApiKey } from './auth.js';
 import { LoadBalancer } from '../lb/balancer.js';
+import { claudeToOpenAI, openAIToClaude, openAIStreamToClaudeStream } from './claude.js';
 
 export async function handleProxy(request, env, store) {
   // Verify client API key
@@ -18,7 +19,7 @@ export async function handleProxy(request, env, store) {
     return handleModels(store);
   }
 
-  // Only POST for completions / embeddings
+  // Only POST for completions / embeddings / messages
   if (request.method !== 'POST') {
     return jsonRes({ error: { message: 'Method not allowed' } }, 405);
   }
@@ -30,6 +31,93 @@ export async function handleProxy(request, env, store) {
     return jsonRes({ error: { message: 'Invalid JSON body' } }, 400);
   }
 
+  // ---- Claude Messages API (/v1/messages) ----
+  if (path.endsWith('/messages')) {
+    return handleClaudeMessages(request, url, body, store);
+  }
+
+  // ---- OpenAI-compatible passthrough ----
+  return handleOpenAIProxy(request, url, path, body, store);
+}
+
+// ─── Claude Messages API handler ───────────────────────────────────
+
+async function handleClaudeMessages(request, url, claudeBody, store) {
+  const model = claudeBody.model || '';
+  const isStream = claudeBody.stream || false;
+
+  // Convert Claude request to OpenAI format
+  const openaiBody = claudeToOpenAI(claudeBody);
+
+  const lb = new LoadBalancer(store);
+  const { targets, error } = await lb.selectTarget(model);
+
+  if (error || targets.length === 0) {
+    // Return error in Claude format
+    return claudeErrorRes(error || 'No available channel for model: ' + model, 503);
+  }
+
+  let lastError = null;
+  for (const target of targets) {
+    try {
+      const baseUrl = target.channel.base_url.replace(/\/+$/, '');
+      const targetUrl = baseUrl + '/chat/completions' + url.search;
+
+      console.log(`[proxy][claude] -> ${target.channel.name} ${targetUrl}`);
+
+      const headers = new Headers();
+      headers.set('Content-Type', 'application/json');
+      headers.set('Authorization', `Bearer ${target.key}`);
+      if (isStream) headers.set('Accept', 'text/event-stream');
+
+      const resp = await fetch(targetUrl, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(openaiBody),
+      });
+
+      if (resp.ok || resp.status < 500) {
+        if (!resp.ok) {
+          // 4xx from upstream — forward as Claude-shaped error
+          const errBody = await resp.text();
+          return claudeErrorRes(`Upstream error: ${errBody}`, resp.status);
+        }
+
+        // ---- Streaming ----
+        if (isStream) {
+          const claudeStream = openAIStreamToClaudeStream(resp.body, model);
+          return new Response(claudeStream, {
+            status: 200,
+            headers: {
+              'Content-Type': 'text/event-stream',
+              'Cache-Control': 'no-cache',
+              'Connection': 'keep-alive',
+              'Access-Control-Allow-Origin': '*',
+            },
+          });
+        }
+
+        // ---- Non-streaming ----
+        const openaiData = await resp.json();
+        const claudeResponse = openAIToClaude(openaiData, model);
+        return jsonRes(claudeResponse, 200);
+      }
+
+      // 5xx — try next target
+      lastError = `${target.channel.name}: HTTP ${resp.status}`;
+      console.error(`[proxy][claude] target failed: ${lastError}`);
+    } catch (err) {
+      lastError = `${target.channel.name}: ${err.message}`;
+      console.error(`[proxy][claude] target error: ${lastError}`);
+    }
+  }
+
+  return claudeErrorRes(`All targets failed. Last error: ${lastError}`, 502);
+}
+
+// ─── OpenAI passthrough handler ────────────────────────────────────
+
+async function handleOpenAIProxy(request, url, path, body, store) {
   const model = body.model || '';
   const lb = new LoadBalancer(store);
   const { targets, error } = await lb.selectTarget(model);
@@ -158,6 +246,22 @@ async function handleModels(store) {
 
 function jsonRes(body, status = 200) {
   return new Response(JSON.stringify(body), {
+    status,
+    headers: {
+      'Content-Type': 'application/json',
+      'Access-Control-Allow-Origin': '*',
+    },
+  });
+}
+
+function claudeErrorRes(message, status = 500) {
+  return new Response(JSON.stringify({
+    type: 'error',
+    error: {
+      type: 'api_error',
+      message,
+    },
+  }), {
     status,
     headers: {
       'Content-Type': 'application/json',
