@@ -106,6 +106,12 @@ label{display:block;margin-bottom:6px;font-size:13px;color:var(--text-1);font-we
 
 /* Empty state */
 .empty{text-align:center;color:var(--text-2);padding:48px 20px;font-size:14px}
+
+/* Language toggle */
+.lang-toggle{display:flex;background:var(--bg-0);border:1px solid var(--border);border-radius:6px;overflow:hidden;margin-bottom:8px}
+.lang-btn{flex:1;padding:6px 0;text-align:center;font-size:12px;font-weight:500;color:var(--text-2);cursor:pointer;transition:all .15s;border:none;background:transparent}
+.lang-btn:hover{color:var(--text-0)}
+.lang-btn.active{background:var(--primary);color:#fff}
 </style>
 </head>
 <body>
@@ -115,9 +121,15 @@ label{display:block;margin-bottom:6px;font-size:13px;color:var(--text-1);font-we
 <div id="login-view" class="login-view">
   <div class="login-card">
     <div class="login-logo">AI Gateway</div>
-    <p class="login-sub">Enter admin password or API key to continue</p>
-    <input type="password" id="login-pwd" placeholder="Password or API Key" autofocus>
-    <button class="btn btn-primary btn-full" onclick="doLogin()">Sign In</button>
+    <p class="login-sub" id="login-sub"></p>
+    <input type="password" id="login-pwd" autofocus>
+    <button class="btn btn-primary btn-full" onclick="doLogin()" id="login-btn"></button>
+    <div style="margin-top:16px">
+      <div class="lang-toggle" id="login-lang-toggle">
+        <button class="lang-btn" onclick="setLang('en')">English</button>
+        <button class="lang-btn" onclick="setLang('zh')">中文</button>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -125,46 +137,42 @@ label{display:block;margin-bottom:6px;font-size:13px;color:var(--text-1);font-we
 <div id="main-view" class="main-view" style="display:none">
   <aside class="sidebar">
     <div class="sidebar-header"><div class="logo">AI Gateway</div></div>
-    <nav class="sidebar-nav">
-      <a class="nav-item active" data-section="dashboard" onclick="navigate('dashboard')">Dashboard</a>
-      <a class="nav-item" data-section="channels" onclick="navigate('channels')">Channels</a>
-      <a class="nav-item" data-section="apikeys" onclick="navigate('apikeys')">API Keys</a>
+    <nav class="sidebar-nav" id="sidebar-nav">
+      <a class="nav-item active" data-section="dashboard" onclick="navigate('dashboard')"></a>
+      <a class="nav-item" data-section="channels" onclick="navigate('channels')"></a>
+      <a class="nav-item" data-section="apikeys" onclick="navigate('apikeys')"></a>
     </nav>
     <div class="sidebar-footer">
-      <button class="btn btn-ghost btn-full" onclick="doLogout()">Sign Out</button>
+      <div class="lang-toggle" id="sidebar-lang-toggle" style="margin-bottom:8px">
+        <button class="lang-btn" onclick="setLang('en')">EN</button>
+        <button class="lang-btn" onclick="setLang('zh')">中文</button>
+      </div>
+      <button class="btn btn-ghost btn-full" onclick="doLogout()" id="logout-btn"></button>
     </div>
   </aside>
 
   <main class="content">
     <!-- Dashboard -->
     <section id="section-dashboard" class="section">
-      <div class="section-header"><h2>Dashboard</h2></div>
+      <div class="section-header"><h2 id="dash-title"></h2></div>
       <div class="stats-grid">
-        <div class="stat-card"><div class="label">Total Channels</div><div class="value" id="s-ch">0</div></div>
-        <div class="stat-card"><div class="label">Enabled</div><div class="value" id="s-en">0</div></div>
-        <div class="stat-card"><div class="label">Upstream Keys</div><div class="value" id="s-uk">0</div></div>
-        <div class="stat-card"><div class="label">Client API Keys</div><div class="value" id="s-ak">0</div></div>
+        <div class="stat-card"><div class="label" id="lbl-ch"></div><div class="value" id="s-ch">0</div></div>
+        <div class="stat-card"><div class="label" id="lbl-en"></div><div class="value" id="s-en">0</div></div>
+        <div class="stat-card"><div class="label" id="lbl-uk"></div><div class="value" id="s-uk">0</div></div>
+        <div class="stat-card"><div class="label" id="lbl-ak"></div><div class="value" id="s-ak">0</div></div>
       </div>
-      <div class="info-card">
-        <h3>Quick Start</h3>
-        <p>1. Go to <strong>Channels</strong> and add an upstream API service with keys</p>
-        <p>2. Go to <strong>API Keys</strong> and generate a client key</p>
-        <p>3. Point your AI client to one of the endpoints below:</p>
-        <p style="margin-top:8px"><strong>OpenAI format:</strong> <code id="proxy-url"></code></p>
-        <p><strong>Claude format:</strong> <code id="proxy-url-claude"></code></p>
-        <div class="form-help" style="margin-top:8px">Claude endpoint accepts <code>x-api-key</code> or <code>Authorization: Bearer</code> header for authentication.</div>
-      </div>
+      <div class="info-card" id="info-card"></div>
     </section>
 
     <!-- Channels -->
     <section id="section-channels" class="section" style="display:none">
       <div class="section-header">
-        <h2>Channels</h2>
-        <button class="btn btn-primary" onclick="showChModal()">Add Channel</button>
+        <h2 id="ch-title"></h2>
+        <button class="btn btn-primary" onclick="showChModal()" id="ch-add-btn"></button>
       </div>
       <div class="table-container">
         <table>
-          <thead><tr><th>Name</th><th>Base URL</th><th>Keys</th><th>Models</th><th>Priority</th><th>Weight</th><th>Status</th><th>Actions</th></tr></thead>
+          <thead><tr id="ch-thead"></tr></thead>
           <tbody id="ch-tbody"></tbody>
         </table>
       </div>
@@ -173,12 +181,12 @@ label{display:block;margin-bottom:6px;font-size:13px;color:var(--text-1);font-we
     <!-- API Keys -->
     <section id="section-apikeys" class="section" style="display:none">
       <div class="section-header">
-        <h2>API Keys</h2>
-        <button class="btn btn-primary" onclick="showAkModal()">Generate Key</button>
+        <h2 id="ak-title"></h2>
+        <button class="btn btn-primary" onclick="showAkModal()" id="ak-gen-btn"></button>
       </div>
       <div class="table-container">
         <table>
-          <thead><tr><th>Name</th><th>Key</th><th>Created</th><th>Status</th><th>Actions</th></tr></thead>
+          <thead><tr id="ak-thead"></tr></thead>
           <tbody id="ak-tbody"></tbody>
         </table>
       </div>
@@ -196,6 +204,167 @@ label{display:block;margin-bottom:6px;font-size:13px;color:var(--text-1);font-we
 
 </div>
 <script>
+// ============ i18n ============
+const I18N = {
+  en: {
+    loginSub: 'Enter admin password or API key to continue',
+    loginPlaceholder: 'Password or API Key',
+    signIn: 'Sign In',
+    signOut: 'Sign Out',
+    dashboard: 'Dashboard',
+    channels: 'Channels',
+    apiKeys: 'API Keys',
+    totalChannels: 'Total Channels',
+    enabled: 'Enabled',
+    upstreamKeys: 'Upstream Keys',
+    clientApiKeys: 'Client API Keys',
+    quickStart: 'Quick Start',
+    qs1: '1. Go to <strong>Channels</strong> and add an upstream API service with keys',
+    qs2: '2. Go to <strong>API Keys</strong> and generate a client key',
+    qs3: '3. Point your AI client to one of the endpoints below:',
+    openaiFormat: 'OpenAI format:',
+    claudeFormat: 'Claude format:',
+    claudeHelp: 'Claude endpoint accepts <code>x-api-key</code> or <code>Authorization: Bearer</code> header for authentication.',
+    addChannel: 'Add Channel',
+    editChannel: 'Edit Channel',
+    name: 'Name',
+    baseUrl: 'Base URL',
+    keys: 'Keys',
+    models: 'Models',
+    priority: 'Priority',
+    weight: 'Weight',
+    status: 'Status',
+    actions: 'Actions',
+    edit: 'Edit',
+    disable: 'Disable',
+    enable: 'Enable',
+    delete: 'Delete',
+    on: 'On',
+    off: 'Off',
+    all: 'All',
+    noChannels: 'No channels yet. Click "Add Channel" to get started.',
+    namePlaceholder: 'e.g. NVIDIA NIM',
+    urlPlaceholder: 'e.g. https://integrate.api.nvidia.com/v1',
+    urlHelp: 'Include the version path, e.g. /v1',
+    keysLabel: 'API Keys (one per line)',
+    keysPlaceholder: 'sk-xxx\\nsk-yyy',
+    modelsLabel: 'Models (one per line, empty = accept all)',
+    modelsPlaceholder: 'gpt-4o\\nclaude-3-opus',
+    modelsHelp: 'Only requests for these models will route to this channel. Leave empty to accept any model.',
+    priorityHelp: 'Lower = higher priority. Tried first.',
+    weightHelp: 'Relative weight within same priority group.',
+    cancel: 'Cancel',
+    save: 'Save',
+    generateKey: 'Generate Key',
+    key: 'Key',
+    created: 'Created',
+    noApiKeys: 'No API keys. Click "Generate Key" to create one.',
+    copy: 'Copy',
+    genKeyTitle: 'Generate API Key',
+    nameOptional: 'Name (optional)',
+    nameOptPlaceholder: 'e.g. My App',
+    generate: 'Generate',
+    keyCreated: 'API Key Created',
+    keyCreatedHint: 'Copy this key now. It will be masked after you close this dialog.',
+    copyClose: 'Copy & Close',
+    confirmDelete: 'Confirm Delete',
+    confirmDeleteMsg: 'Are you sure you want to delete <strong>{name}</strong>? This cannot be undone.',
+    deleted: 'Deleted',
+    sessionExpired: 'Session expired',
+    networkError: 'Network error',
+    enterPwd: 'Please enter password',
+    loginFailed: 'Login failed',
+    channelUpdated: 'Channel updated',
+    channelCreated: 'Channel created',
+    nameUrlRequired: 'Name and Base URL are required',
+    saveFailed: 'Save failed',
+    failed: 'Failed',
+    copied: 'Copied!',
+    copyFailed: 'Copy failed',
+  },
+  zh: {
+    loginSub: '请输入管理员密码或 API Key 继续',
+    loginPlaceholder: '密码或 API Key',
+    signIn: '登录',
+    signOut: '退出登录',
+    dashboard: '仪表盘',
+    channels: '渠道管理',
+    apiKeys: 'API 密钥',
+    totalChannels: '渠道总数',
+    enabled: '已启用',
+    upstreamKeys: '上游密钥',
+    clientApiKeys: '客户端密钥',
+    quickStart: '快速开始',
+    qs1: '1. 前往 <strong>渠道管理</strong>，添加上游 API 服务和密钥',
+    qs2: '2. 前往 <strong>API 密钥</strong>，生成客户端密钥',
+    qs3: '3. 将 AI 客户端指向以下端点：',
+    openaiFormat: 'OpenAI 格式：',
+    claudeFormat: 'Claude 格式：',
+    claudeHelp: 'Claude 端点支持 <code>x-api-key</code> 或 <code>Authorization: Bearer</code> 请求头进行认证。',
+    addChannel: '添加渠道',
+    editChannel: '编辑渠道',
+    name: '名称',
+    baseUrl: '基础 URL',
+    keys: '密钥数',
+    models: '模型',
+    priority: '优先级',
+    weight: '权重',
+    status: '状态',
+    actions: '操作',
+    edit: '编辑',
+    disable: '禁用',
+    enable: '启用',
+    delete: '删除',
+    on: '启用',
+    off: '停用',
+    all: '全部',
+    noChannels: '暂无渠道，点击「添加渠道」开始配置。',
+    namePlaceholder: '例如 NVIDIA NIM',
+    urlPlaceholder: '例如 https://integrate.api.nvidia.com/v1',
+    urlHelp: '需包含版本路径，例如 /v1',
+    keysLabel: 'API 密钥（每行一个）',
+    keysPlaceholder: 'sk-xxx\\nsk-yyy',
+    modelsLabel: '模型列表（每行一个，留空表示接受所有模型）',
+    modelsPlaceholder: 'gpt-4o\\nclaude-3-opus',
+    modelsHelp: '仅匹配这些模型的请求会路由到此渠道。留空则接受任何模型。',
+    priorityHelp: '数值越小优先级越高，优先尝试。',
+    weightHelp: '同优先级组内的相对权重。',
+    cancel: '取消',
+    save: '保存',
+    generateKey: '生成密钥',
+    key: '密钥',
+    created: '创建时间',
+    noApiKeys: '暂无 API 密钥，点击「生成密钥」创建。',
+    copy: '复制',
+    genKeyTitle: '生成 API 密钥',
+    nameOptional: '名称（可选）',
+    nameOptPlaceholder: '例如 我的应用',
+    generate: '生成',
+    keyCreated: 'API 密钥已创建',
+    keyCreatedHint: '请立即复制此密钥，关闭对话框后将不再显示完整密钥。',
+    copyClose: '复制并关闭',
+    confirmDelete: '确认删除',
+    confirmDeleteMsg: '确定要删除 <strong>{name}</strong> 吗？此操作不可撤销。',
+    deleted: '已删除',
+    sessionExpired: '会话已过期',
+    networkError: '网络错误',
+    enterPwd: '请输入密码',
+    loginFailed: '登录失败',
+    channelUpdated: '渠道已更新',
+    channelCreated: '渠道已创建',
+    nameUrlRequired: '名称和基础 URL 不能为空',
+    saveFailed: '保存失败',
+    failed: '操作失败',
+    copied: '已复制！',
+    copyFailed: '复制失败',
+  },
+};
+
+let lang = localStorage.getItem('ag_lang') || (navigator.language.startsWith('zh') ? 'zh' : 'en');
+function t(key) { return I18N[lang]?.[key] || I18N.en[key] || key; }
+function setLang(l) { lang = l; localStorage.setItem('ag_lang', l); renderAll(); }
+function renderAll() { renderLogin(); renderSidebar(); render(); }
+
 // ============ State ============
 let token = localStorage.getItem('ag_token');
 let channels = [];
@@ -213,10 +382,10 @@ async function api(path, opts = {}) {
         ...(opts.headers || {}),
       },
     });
-    if (res.status === 401) { doLogout(); toast('Session expired', 'error'); return null; }
+    if (res.status === 401) { doLogout(); toast(t('sessionExpired'), 'error'); return null; }
     return await res.json();
   } catch (e) {
-    toast('Network error: ' + e.message, 'error');
+    toast(t('networkError') + ': ' + e.message, 'error');
     return null;
   }
 }
@@ -230,7 +399,7 @@ async function loadData() {
 // ============ Auth ============
 async function doLogin() {
   const pwd = document.getElementById('login-pwd').value;
-  if (!pwd) { toast('Please enter password', 'error'); return; }
+  if (!pwd) { toast(t('enterPwd'), 'error'); return; }
   try {
     const res = await fetch('/admin/api/login', {
       method: 'POST',
@@ -245,10 +414,10 @@ async function doLogin() {
       await loadData();
       render();
     } else {
-      toast(data.error || 'Login failed', 'error');
+      toast(data.error || t('loginFailed'), 'error');
     }
   } catch (e) {
-    toast('Network error', 'error');
+    toast(t('networkError'), 'error');
   }
 }
 
@@ -262,11 +431,34 @@ function doLogout() {
 function showLogin() {
   document.getElementById('login-view').style.display = 'flex';
   document.getElementById('main-view').style.display = 'none';
+  renderLogin();
 }
 
 function showMain() {
   document.getElementById('login-view').style.display = 'none';
   document.getElementById('main-view').style.display = 'flex';
+  renderSidebar();
+}
+
+function renderLogin() {
+  document.getElementById('login-sub').textContent = t('loginSub');
+  document.getElementById('login-pwd').placeholder = t('loginPlaceholder');
+  document.getElementById('login-btn').textContent = t('signIn');
+  document.querySelectorAll('#login-lang-toggle .lang-btn').forEach(b => {
+    b.classList.toggle('active', (b.textContent === 'English' && lang === 'en') || (b.textContent === '中文' && lang === 'zh'));
+  });
+}
+
+function renderSidebar() {
+  const navMap = { dashboard: 'dashboard', channels: 'channels', apikeys: 'apiKeys' };
+  document.querySelectorAll('#sidebar-nav .nav-item').forEach(el => {
+    el.textContent = t(navMap[el.dataset.section]);
+    el.classList.toggle('active', el.dataset.section === curSection);
+  });
+  document.getElementById('logout-btn').textContent = t('signOut');
+  document.querySelectorAll('#sidebar-lang-toggle .lang-btn').forEach(b => {
+    b.classList.toggle('active', (b.textContent === 'EN' && lang === 'en') || (b.textContent === '中文' && lang === 'zh'));
+  });
 }
 
 function navigate(section) {
@@ -282,27 +474,54 @@ function navigate(section) {
 
 function render() {
   renderDashboard();
+  renderChannelHeaders();
+  renderApiKeyHeaders();
   if (curSection === 'channels') renderChannels();
   if (curSection === 'apikeys') renderApiKeys();
 }
 
+function renderChannelHeaders() {
+  document.getElementById('ch-title').textContent = t('channels');
+  document.getElementById('ch-add-btn').textContent = t('addChannel');
+  document.getElementById('ch-thead').innerHTML = '<th>'+[t('name'),t('baseUrl'),t('keys'),t('models'),t('priority'),t('weight'),t('status'),t('actions')].join('</th><th>')+'</th>';
+}
+
+function renderApiKeyHeaders() {
+  document.getElementById('ak-title').textContent = t('apiKeys');
+  document.getElementById('ak-gen-btn').textContent = t('generateKey');
+  document.getElementById('ak-thead').innerHTML = '<th>'+[t('name'),t('key'),t('created'),t('status'),t('actions')].join('</th><th>')+'</th>';
+}
+
 // ============ Dashboard ============
 function renderDashboard() {
+  document.getElementById('dash-title').textContent = t('dashboard');
+  document.getElementById('lbl-ch').textContent = t('totalChannels');
+  document.getElementById('lbl-en').textContent = t('enabled');
+  document.getElementById('lbl-uk').textContent = t('upstreamKeys');
+  document.getElementById('lbl-ak').textContent = t('clientApiKeys');
   const en = channels.filter(c => c.enabled).length;
   const uk = channels.reduce((s, c) => s + (c.keys?.length || 0), 0);
   document.getElementById('s-ch').textContent = channels.length;
   document.getElementById('s-en').textContent = en;
   document.getElementById('s-uk').textContent = uk;
   document.getElementById('s-ak').textContent = apiKeys.length;
-  document.getElementById('proxy-url').textContent = location.origin + '/v1';
-  document.getElementById('proxy-url-claude').textContent = location.origin + '/v1/messages';
+  const baseUrl = location.origin;
+  document.getElementById('info-card').innerHTML = \`
+    <h3>\${t('quickStart')}</h3>
+    <p>\${t('qs1')}</p>
+    <p>\${t('qs2')}</p>
+    <p>\${t('qs3')}</p>
+    <p style="margin-top:8px"><strong>\${t('openaiFormat')}</strong> <code>\${baseUrl}/v1</code></p>
+    <p><strong>\${t('claudeFormat')}</strong> <code>\${baseUrl}/v1/messages</code></p>
+    <div class="form-help" style="margin-top:8px">\${t('claudeHelp')}</div>
+  \`;
 }
 
 // ============ Channels ============
 function renderChannels() {
   const tb = document.getElementById('ch-tbody');
   if (!channels.length) {
-    tb.innerHTML = '<tr><td colspan="8" class="empty">No channels yet. Click "Add Channel" to get started.</td></tr>';
+    tb.innerHTML = '<tr><td colspan="8" class="empty">' + t('noChannels') + '</td></tr>';
     return;
   }
   tb.innerHTML = channels.map(c => \`
@@ -310,14 +529,14 @@ function renderChannels() {
       <td><strong>\${esc(c.name)}</strong></td>
       <td class="cell-truncate" title="\${esc(c.base_url)}">\${esc(c.base_url)}</td>
       <td>\${c.keys?.length || 0}</td>
-      <td>\${c.models?.length || '<span style="color:var(--text-2)">All</span>'}</td>
+      <td>\${c.models?.length || '<span style="color:var(--text-2)">' + t('all') + '</span>'}</td>
       <td>\${c.priority}</td>
       <td>\${c.weight}</td>
-      <td><span class="badge \${c.enabled ? 'badge-on' : 'badge-off'}">\${c.enabled ? 'On' : 'Off'}</span></td>
+      <td><span class="badge \${c.enabled ? 'badge-on' : 'badge-off'}">\${c.enabled ? t('on') : t('off')}</span></td>
       <td style="white-space:nowrap">
-        <button class="btn btn-sm btn-ghost" onclick="showChModal('\${c.id}')">Edit</button>
-        <button class="btn btn-sm btn-ghost" onclick="toggleCh('\${c.id}')">\${c.enabled ? 'Disable' : 'Enable'}</button>
-        <button class="btn btn-sm btn-danger" onclick="confirmDel('channel','\${c.id}','\${esc(c.name)}')">Delete</button>
+        <button class="btn btn-sm btn-ghost" onclick="showChModal('\${c.id}')">\${t('edit')}</button>
+        <button class="btn btn-sm btn-ghost" onclick="toggleCh('\${c.id}')">\${c.enabled ? t('disable') : t('enable')}</button>
+        <button class="btn btn-sm btn-danger" onclick="confirmDel('channel','\${c.id}','\${esc(c.name)}')">\${t('delete')}</button>
       </td>
     </tr>
   \`).join('');
@@ -325,42 +544,42 @@ function renderChannels() {
 
 function showChModal(id) {
   const ch = id ? channels.find(c => c.id === id) : null;
-  const t = ch ? 'Edit Channel' : 'Add Channel';
+  const title = ch ? t('editChannel') : t('addChannel');
   const html = \`
-    <h3>\${t}</h3>
+    <h3>\${title}</h3>
     <div class="form-group">
-      <label>Name</label>
-      <input id="f-name" value="\${ch ? esc(ch.name) : ''}" placeholder="e.g. NVIDIA NIM">
+      <label>\${t('name')}</label>
+      <input id="f-name" value="\${ch ? esc(ch.name) : ''}" placeholder="\${t('namePlaceholder')}">
     </div>
     <div class="form-group">
-      <label>Base URL</label>
-      <input id="f-url" value="\${ch ? esc(ch.base_url) : ''}" placeholder="e.g. https://integrate.api.nvidia.com/v1">
-      <div class="form-help">Include the version path, e.g. /v1</div>
+      <label>\${t('baseUrl')}</label>
+      <input id="f-url" value="\${ch ? esc(ch.base_url) : ''}" placeholder="\${t('urlPlaceholder')}">
+      <div class="form-help">\${t('urlHelp')}</div>
     </div>
     <div class="form-group">
-      <label>API Keys (one per line)</label>
-      <textarea id="f-keys" placeholder="sk-xxx\\nsk-yyy">\${ch ? (ch.keys||[]).join('\\n') : ''}</textarea>
+      <label>\${t('keysLabel')}</label>
+      <textarea id="f-keys" placeholder="\${t('keysPlaceholder')}">\${ch ? (ch.keys||[]).join('\\n') : ''}</textarea>
     </div>
     <div class="form-group">
-      <label>Models (one per line, empty = accept all)</label>
-      <textarea id="f-models" style="min-height:80px" placeholder="gpt-4o\\nclaude-3-opus">\${ch ? (ch.models||[]).join('\\n') : ''}</textarea>
-      <div class="form-help">Only requests for these models will route to this channel. Leave empty to accept any model.</div>
+      <label>\${t('modelsLabel')}</label>
+      <textarea id="f-models" style="min-height:80px" placeholder="\${t('modelsPlaceholder')}">\${ch ? (ch.models||[]).join('\\n') : ''}</textarea>
+      <div class="form-help">\${t('modelsHelp')}</div>
     </div>
     <div class="form-row">
       <div class="form-group">
-        <label>Priority</label>
+        <label>\${t('priority')}</label>
         <input type="number" id="f-pri" value="\${ch ? ch.priority : 0}" min="0">
-        <div class="form-help">Lower = higher priority. Tried first.</div>
+        <div class="form-help">\${t('priorityHelp')}</div>
       </div>
       <div class="form-group">
-        <label>Weight</label>
+        <label>\${t('weight')}</label>
         <input type="number" id="f-wt" value="\${ch ? ch.weight : 10}" min="1">
-        <div class="form-help">Relative weight within same priority group.</div>
+        <div class="form-help">\${t('weightHelp')}</div>
       </div>
     </div>
     <div class="modal-actions">
-      <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
-      <button class="btn btn-primary" onclick="saveCh('\${id||''}')">Save</button>
+      <button class="btn btn-ghost" onclick="closeModal()">\${t('cancel')}</button>
+      <button class="btn btn-primary" onclick="saveCh('\${id||''}')">\${t('save')}</button>
     </div>
   \`;
   openModal(html);
@@ -374,7 +593,7 @@ async function saveCh(id) {
   const priority = parseInt(document.getElementById('f-pri').value) || 0;
   const weight = parseInt(document.getElementById('f-wt').value) || 1;
 
-  if (!name || !base_url) { toast('Name and Base URL are required', 'error'); return; }
+  if (!name || !base_url) { toast(t('nameUrlRequired'), 'error'); return; }
 
   const body = JSON.stringify({ name, base_url, keys, models, priority, weight });
   const r = id
@@ -382,12 +601,12 @@ async function saveCh(id) {
     : await api('/channels', { method: 'POST', body });
 
   if (r && !r.error) {
-    toast(id ? 'Channel updated' : 'Channel created', 'success');
+    toast(id ? t('channelUpdated') : t('channelCreated'), 'success');
     closeModal();
     await loadData();
     render();
   } else {
-    toast(r?.error || 'Save failed', 'error');
+    toast(r?.error || t('saveFailed'), 'error');
   }
 }
 
@@ -400,20 +619,20 @@ async function toggleCh(id) {
 function renderApiKeys() {
   const tb = document.getElementById('ak-tbody');
   if (!apiKeys.length) {
-    tb.innerHTML = '<tr><td colspan="5" class="empty">No API keys. Click "Generate Key" to create one.</td></tr>';
+    tb.innerHTML = '<tr><td colspan="5" class="empty">' + t('noApiKeys') + '</td></tr>';
     return;
   }
   tb.innerHTML = apiKeys.map(k => \`
     <tr>
       <td>\${esc(k.name)}</td>
       <td><span class="key-mono">\${maskKey(k.key)}</span>
-        <button class="btn btn-sm btn-ghost" style="margin-left:8px" data-key="\${esc(k.key)}" onclick="copyKey(this)">Copy</button>
+        <button class="btn btn-sm btn-ghost" style="margin-left:8px" data-key="\${esc(k.key)}" onclick="copyKey(this)">\${t('copy')}</button>
       </td>
       <td>\${fmtDate(k.created_at)}</td>
-      <td><span class="badge \${k.enabled?'badge-on':'badge-off'}">\${k.enabled?'On':'Off'}</span></td>
+      <td><span class="badge \${k.enabled?'badge-on':'badge-off'}">\${k.enabled?t('on'):t('off')}</span></td>
       <td>
-        <button class="btn btn-sm btn-ghost" onclick="toggleAk('\${k.id}')">\${k.enabled?'Disable':'Enable'}</button>
-        <button class="btn btn-sm btn-danger" onclick="confirmDel('apikey','\${k.id}','\${esc(k.name)}')">Delete</button>
+        <button class="btn btn-sm btn-ghost" onclick="toggleAk('\${k.id}')">\${k.enabled?t('disable'):t('enable')}</button>
+        <button class="btn btn-sm btn-danger" onclick="confirmDel('apikey','\${k.id}','\${esc(k.name)}')">\${t('delete')}</button>
       </td>
     </tr>
   \`).join('');
@@ -421,14 +640,14 @@ function renderApiKeys() {
 
 function showAkModal() {
   openModal(\`
-    <h3>Generate API Key</h3>
+    <h3>\${t('genKeyTitle')}</h3>
     <div class="form-group">
-      <label>Name (optional)</label>
-      <input id="f-akname" placeholder="e.g. My App">
+      <label>\${t('nameOptional')}</label>
+      <input id="f-akname" placeholder="\${t('nameOptPlaceholder')}">
     </div>
     <div class="modal-actions">
-      <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
-      <button class="btn btn-primary" onclick="genAk()">Generate</button>
+      <button class="btn btn-ghost" onclick="closeModal()">\${t('cancel')}</button>
+      <button class="btn btn-primary" onclick="genAk()">\${t('generate')}</button>
     </div>
   \`);
 }
@@ -439,19 +658,19 @@ async function genAk() {
   if (r && !r.error) {
     closeModal();
     openModal(\`
-      <h3>API Key Created</h3>
-      <p style="color:var(--text-1);margin-bottom:16px">Copy this key now. It will be masked after you close this dialog.</p>
+      <h3>\${t('keyCreated')}</h3>
+      <p style="color:var(--text-1);margin-bottom:16px">\${t('keyCreatedHint')}</p>
       <div class="form-group">
         <input type="text" value="\${r.key}" readonly onclick="this.select()" style="font-family:monospace;font-size:13px">
       </div>
       <div class="modal-actions">
-        <button class="btn btn-primary" onclick="copyText('\${r.key}');closeModal()">Copy & Close</button>
+        <button class="btn btn-primary" onclick="copyText('\${r.key}');closeModal()">\${t('copyClose')}</button>
       </div>
     \`);
     await loadData();
     render();
   } else {
-    toast(r?.error || 'Failed', 'error');
+    toast(r?.error || t('failed'), 'error');
   }
 }
 
@@ -465,11 +684,11 @@ async function toggleAk(id) {
 // ============ Shared ============
 function confirmDel(type, id, name) {
   openModal(\`
-    <h3>Confirm Delete</h3>
-    <p style="color:var(--text-1);margin-bottom:24px">Are you sure you want to delete <strong>\${name}</strong>? This cannot be undone.</p>
+    <h3>\${t('confirmDelete')}</h3>
+    <p style="color:var(--text-1);margin-bottom:24px">\${t('confirmDeleteMsg').replace('{name}', name)}</p>
     <div class="modal-actions">
-      <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
-      <button class="btn btn-danger" id="del-btn">Delete</button>
+      <button class="btn btn-ghost" onclick="closeModal()">\${t('cancel')}</button>
+      <button class="btn btn-danger" id="del-btn">\${t('delete')}</button>
     </div>
   \`);
   document.getElementById('del-btn').onclick = async () => {
@@ -477,7 +696,7 @@ function confirmDel(type, id, name) {
     const path = type === 'channel' ? '/channels/' : '/apikeys/';
     const r = await api(path + id, { method: 'DELETE' });
     if (r && !r.error) {
-      toast('Deleted', 'success');
+      toast(t('deleted'), 'success');
       await loadData();
       render();
     }
@@ -513,9 +732,9 @@ function esc(s) {
 function maskKey(k) { return k && k.length > 12 ? k.slice(0,7) + '...' + k.slice(-4) : k; }
 function fmtDate(d) { return d ? new Date(d).toLocaleDateString() : '-'; }
 function copyKey(btn) { copyText(btn.dataset.key); }
-async function copyText(t) {
-  try { await navigator.clipboard.writeText(t); toast('Copied!', 'success'); }
-  catch { toast('Copy failed', 'error'); }
+async function copyText(txt) {
+  try { await navigator.clipboard.writeText(txt); toast(t('copied'), 'success'); }
+  catch { toast(t('copyFailed'), 'error'); }
 }
 
 // ============ Events ============
@@ -532,8 +751,6 @@ document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal()
   } else {
     showLogin();
   }
-  document.getElementById('proxy-url').textContent = location.origin + '/v1';
-  document.getElementById('proxy-url-claude').textContent = location.origin + '/v1/messages';
 })();
 </script>
 </body>
