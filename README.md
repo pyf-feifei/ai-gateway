@@ -1,6 +1,15 @@
+---
+title: AI Gateway
+emoji: 🚀
+colorFrom: indigo
+colorTo: purple
+sdk: docker
+app_port: 7860
+---
+
 # AI Gateway
 
-OpenAI 兼容的 API 代理网关，部署在 Cloudflare Worker 上。支持多上游服务、多 Key 负载均衡、Web 管理面板。
+OpenAI 兼容的 API 代理网关。支持多上游服务、多 Key 负载均衡、Web 管理面板。可部署在 Cloudflare Worker 或 Docker（HF Spaces）上。
 
 ## 功能
 
