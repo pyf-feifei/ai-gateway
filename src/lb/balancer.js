@@ -22,9 +22,23 @@ export class LoadBalancer {
       return { targets: [], error: 'No available channel for model: ' + model };
     }
 
+    // Filter out channels that exceeded their quota
+    const quotaResults = await Promise.all(
+      compatible.map(ch => this.store.checkQuota(ch, model))
+    );
+    const withinQuota = compatible.filter((_, i) => quotaResults[i].allowed);
+
+    if (withinQuota.length === 0) {
+      const overQuota = quotaResults.find(r => !r.allowed);
+      const reason = overQuota?.reason === 'model_limit'
+        ? `Model "${model}" has reached its daily per-model limit`
+        : 'Daily total quota exceeded for all available channels';
+      return { targets: [], error: reason };
+    }
+
     // Group by priority (lower number = higher priority)
     const groups = {};
-    for (const ch of compatible) {
+    for (const ch of withinQuota) {
       const p = ch.priority ?? 0;
       if (!groups[p]) groups[p] = [];
       groups[p].push(ch);
@@ -70,18 +84,16 @@ export class LoadBalancer {
   }
 
   /**
-   * Round-robin key selection within a channel.
-   * Returns all keys starting from the current RR position.
+   * Key order within a channel: random start then round-robin order.
+   * Uses random start to avoid race on shared RR counter under concurrency;
+   * still returns keys in a deterministic cyclic order for failover.
    */
   async getOrderedKeys(channel) {
     const keys = channel.keys || [];
     if (keys.length === 0) return [];
 
-    const counter = await this.store.getRRCounter(channel.id);
-    const start = counter % keys.length;
-
-    // Advance counter for next request
-    await this.store.setRRCounter(channel.id, counter + 1);
+    // Random start index — concurrency-safe, no shared counter read-modify-write
+    const start = Math.floor(Math.random() * keys.length);
 
     const ordered = [];
     for (let i = 0; i < keys.length; i++) {

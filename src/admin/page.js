@@ -112,6 +112,21 @@ label{display:block;margin-bottom:6px;font-size:13px;color:var(--text-1);font-we
 .lang-btn{flex:1;padding:6px 0;text-align:center;font-size:12px;font-weight:500;color:var(--text-2);cursor:pointer;transition:all .15s;border:none;background:transparent}
 .lang-btn:hover{color:var(--text-0)}
 .lang-btn.active{background:var(--primary);color:#fff}
+
+/* Usage monitor */
+.usage-card{background:var(--bg-2);border:1px solid var(--border);border-radius:var(--radius);padding:24px;margin-bottom:16px}
+.usage-card h4{font-size:16px;font-weight:600;margin-bottom:16px;display:flex;align-items:center;gap:8px}
+.usage-row{margin-bottom:14px}
+.usage-row:last-child{margin-bottom:0}
+.usage-label{display:flex;justify-content:space-between;margin-bottom:5px;font-size:13px;color:var(--text-1)}
+.usage-label .usage-val{font-weight:600;color:var(--text-0)}
+.progress-bar{height:8px;background:var(--bg-0);border-radius:4px;overflow:hidden}
+.progress-fill{height:100%;border-radius:4px;transition:width .4s ease}
+.progress-ok{background:linear-gradient(90deg,#22c55e,#4ade80)}
+.progress-warn{background:linear-gradient(90deg,#f59e0b,#fbbf24)}
+.progress-danger{background:linear-gradient(90deg,#ef4444,#f87171)}
+.date-picker{display:flex;gap:8px;align-items:center;margin-bottom:20px}
+.date-picker input[type="date"]{width:180px}
 </style>
 </head>
 <body>
@@ -140,6 +155,7 @@ label{display:block;margin-bottom:6px;font-size:13px;color:var(--text-1);font-we
     <nav class="sidebar-nav" id="sidebar-nav">
       <a class="nav-item active" data-section="dashboard" onclick="navigate('dashboard')"></a>
       <a class="nav-item" data-section="channels" onclick="navigate('channels')"></a>
+      <a class="nav-item" data-section="usage" onclick="navigate('usage')"></a>
       <a class="nav-item" data-section="apikeys" onclick="navigate('apikeys')"></a>
     </nav>
     <div class="sidebar-footer">
@@ -176,6 +192,19 @@ label{display:block;margin-bottom:6px;font-size:13px;color:var(--text-1);font-we
           <tbody id="ch-tbody"></tbody>
         </table>
       </div>
+    </section>
+
+    <!-- Usage Monitor -->
+    <section id="section-usage" class="section" style="display:none">
+      <div class="section-header">
+        <h2 id="usage-title"></h2>
+        <button class="btn btn-ghost" onclick="loadUsage()" id="usage-refresh-btn"></button>
+      </div>
+      <div class="date-picker">
+        <label id="usage-date-label" style="margin:0;white-space:nowrap"></label>
+        <input type="date" id="usage-date" onchange="loadUsage()">
+      </div>
+      <div id="usage-container"></div>
     </section>
 
     <!-- API Keys -->
@@ -281,6 +310,22 @@ const I18N = {
     failed: 'Failed',
     copied: 'Copied!',
     copyFailed: 'Copy failed',
+    usageMonitor: 'Usage Monitor',
+    quotaSettings: 'Quota Settings',
+    enableQuota: 'Enable Quota',
+    dailyTotalLimit: 'Daily Total Limit',
+    dailyPerModelLimit: 'Daily Per-Model Limit',
+    quotaTotalHelp: 'Total requests per day. 0 = unlimited.',
+    quotaModelHelp: 'Max requests per model per day. 0 = unlimited.',
+    totalUsage: 'Daily Total',
+    perModelUsage: 'Per Model',
+    noQuotaChannels: 'No channels with quota enabled. Enable quota in channel settings.',
+    quotaExceeded: 'Exceeded',
+    remaining: 'remaining',
+    unlimited: 'Unlimited',
+    usageDate: 'Date',
+    refreshUsage: 'Refresh',
+    quota: 'Quota',
   },
   zh: {
     loginSub: '请输入管理员密码或 API Key 继续',
@@ -357,6 +402,22 @@ const I18N = {
     failed: '操作失败',
     copied: '已复制！',
     copyFailed: '复制失败',
+    usageMonitor: '用量监控',
+    quotaSettings: '配额设置',
+    enableQuota: '启用配额',
+    dailyTotalLimit: '每日总量限制',
+    dailyPerModelLimit: '每日单模型限制',
+    quotaTotalHelp: '每日请求总量上限，0 = 不限制。',
+    quotaModelHelp: '每个模型每日请求上限，0 = 不限制。',
+    totalUsage: '每日总量',
+    perModelUsage: '单模型用量',
+    noQuotaChannels: '暂无启用配额的渠道，请在渠道设置中启用配额。',
+    quotaExceeded: '已超限',
+    remaining: '剩余',
+    unlimited: '不限制',
+    usageDate: '日期',
+    refreshUsage: '刷新',
+    quota: '配额',
   },
 };
 
@@ -450,7 +511,7 @@ function renderLogin() {
 }
 
 function renderSidebar() {
-  const navMap = { dashboard: 'dashboard', channels: 'channels', apikeys: 'apiKeys' };
+  const navMap = { dashboard: 'dashboard', channels: 'channels', usage: 'usageMonitor', apikeys: 'apiKeys' };
   document.querySelectorAll('#sidebar-nav .nav-item').forEach(el => {
     el.textContent = t(navMap[el.dataset.section]);
     el.classList.toggle('active', el.dataset.section === curSection);
@@ -477,13 +538,14 @@ function render() {
   renderChannelHeaders();
   renderApiKeyHeaders();
   if (curSection === 'channels') renderChannels();
+  if (curSection === 'usage') { renderUsageHeaders(); loadUsage(); }
   if (curSection === 'apikeys') renderApiKeys();
 }
 
 function renderChannelHeaders() {
   document.getElementById('ch-title').textContent = t('channels');
   document.getElementById('ch-add-btn').textContent = t('addChannel');
-  document.getElementById('ch-thead').innerHTML = '<th>'+[t('name'),t('baseUrl'),t('keys'),t('models'),t('priority'),t('weight'),t('status'),t('actions')].join('</th><th>')+'</th>';
+  document.getElementById('ch-thead').innerHTML = '<th>'+[t('name'),t('baseUrl'),t('keys'),t('models'),t('priority'),t('weight'),t('quota'),t('status'),t('actions')].join('</th><th>')+'</th>';
 }
 
 function renderApiKeyHeaders() {
@@ -521,7 +583,7 @@ function renderDashboard() {
 function renderChannels() {
   const tb = document.getElementById('ch-tbody');
   if (!channels.length) {
-    tb.innerHTML = '<tr><td colspan="8" class="empty">' + t('noChannels') + '</td></tr>';
+    tb.innerHTML = '<tr><td colspan="9" class="empty">' + t('noChannels') + '</td></tr>';
     return;
   }
   tb.innerHTML = channels.map(c => \`
@@ -532,6 +594,7 @@ function renderChannels() {
       <td>\${c.models?.length || '<span style="color:var(--text-2)">' + t('all') + '</span>'}</td>
       <td>\${c.priority}</td>
       <td>\${c.weight}</td>
+      <td>\${c.quota_enabled ? '<span class="badge badge-on">' + (c.quota_daily_total || '∞') + '/' + (c.quota_daily_per_model || '∞') + '</span>' : '<span style="color:var(--text-2)">-</span>'}</td>
       <td><span class="badge \${c.enabled ? 'badge-on' : 'badge-off'}">\${c.enabled ? t('on') : t('off')}</span></td>
       <td style="white-space:nowrap">
         <button class="btn btn-sm btn-ghost" onclick="showChModal('\${c.id}')">\${t('edit')}</button>
@@ -577,6 +640,24 @@ function showChModal(id) {
         <div class="form-help">\${t('weightHelp')}</div>
       </div>
     </div>
+    <div style="border-top:1px solid var(--border);margin:8px 0 16px;padding-top:16px">
+      <label style="display:flex;align-items:center;gap:8px;cursor:pointer;margin-bottom:12px">
+        <input type="checkbox" id="f-quota" \${ch?.quota_enabled ? 'checked' : ''} style="width:auto" onchange="document.getElementById('quota-fields').style.display=this.checked?'grid':'none'">
+        <span style="font-size:14px;font-weight:600">\${t('enableQuota')}</span>
+      </label>
+      <div class="form-row" id="quota-fields" style="display:\${ch?.quota_enabled ? 'grid' : 'none'}">
+        <div class="form-group">
+          <label>\${t('dailyTotalLimit')}</label>
+          <input type="number" id="f-qt" value="\${ch?.quota_daily_total || 2000}" min="0">
+          <div class="form-help">\${t('quotaTotalHelp')}</div>
+        </div>
+        <div class="form-group">
+          <label>\${t('dailyPerModelLimit')}</label>
+          <input type="number" id="f-qm" value="\${ch?.quota_daily_per_model || 500}" min="0">
+          <div class="form-help">\${t('quotaModelHelp')}</div>
+        </div>
+      </div>
+    </div>
     <div class="modal-actions">
       <button class="btn btn-ghost" onclick="closeModal()">\${t('cancel')}</button>
       <button class="btn btn-primary" onclick="saveCh('\${id||''}')">\${t('save')}</button>
@@ -593,9 +674,13 @@ async function saveCh(id) {
   const priority = parseInt(document.getElementById('f-pri').value) || 0;
   const weight = parseInt(document.getElementById('f-wt').value) || 1;
 
+  const quota_enabled = document.getElementById('f-quota').checked;
+  const quota_daily_total = parseInt(document.getElementById('f-qt').value) || 0;
+  const quota_daily_per_model = parseInt(document.getElementById('f-qm').value) || 0;
+
   if (!name || !base_url) { toast(t('nameUrlRequired'), 'error'); return; }
 
-  const body = JSON.stringify({ name, base_url, keys, models, priority, weight });
+  const body = JSON.stringify({ name, base_url, keys, models, priority, weight, quota_enabled, quota_daily_total, quota_daily_per_model });
   const r = id
     ? await api('/channels/' + id, { method: 'PUT', body })
     : await api('/channels', { method: 'POST', body });
@@ -679,6 +764,79 @@ async function toggleAk(id) {
   if (!k) return;
   const r = await api('/apikeys/' + id, { method: 'PATCH', body: JSON.stringify({ enabled: !k.enabled }) });
   if (r && !r.error) { await loadData(); render(); }
+}
+
+// ============ Usage Monitor ============
+let usageData = null;
+
+function renderUsageHeaders() {
+  document.getElementById('usage-title').textContent = t('usageMonitor');
+  document.getElementById('usage-refresh-btn').textContent = t('refreshUsage');
+  document.getElementById('usage-date-label').textContent = t('usageDate');
+  const dateInput = document.getElementById('usage-date');
+  if (!dateInput.value) {
+    dateInput.value = new Date().toISOString().slice(0, 10);
+  }
+}
+
+async function loadUsage() {
+  const date = document.getElementById('usage-date').value || new Date().toISOString().slice(0, 10);
+  const data = await api('/usage?date=' + date);
+  if (data) {
+    usageData = data;
+    renderUsage();
+  }
+}
+
+function renderUsage() {
+  const container = document.getElementById('usage-container');
+  if (!usageData || !usageData.channels || usageData.channels.length === 0) {
+    container.innerHTML = '<div class="empty">' + t('noQuotaChannels') + '</div>';
+    return;
+  }
+  container.innerHTML = usageData.channels.map(ch => {
+    const totalPct = ch.quota_daily_total > 0
+      ? Math.min(100, Math.round(ch.usage.total / ch.quota_daily_total * 100))
+      : 0;
+    const totalClass = totalPct >= 90 ? 'progress-danger' : totalPct >= 70 ? 'progress-warn' : 'progress-ok';
+    const totalLabel = ch.quota_daily_total > 0
+      ? ch.usage.total + ' / ' + ch.quota_daily_total + '  (' + totalPct + '%)'
+      : ch.usage.total + ' (' + t('unlimited') + ')';
+
+    const modelNames = Object.keys(ch.usage.models || {});
+    if (ch.models?.length) {
+      ch.models.forEach(m => { if (!modelNames.includes(m)) modelNames.push(m); });
+    }
+    modelNames.sort();
+
+    const modelRows = modelNames.map(m => {
+      const count = ch.usage.models?.[m] || 0;
+      const pct = ch.quota_daily_per_model > 0
+        ? Math.min(100, Math.round(count / ch.quota_daily_per_model * 100))
+        : 0;
+      const cls = pct >= 90 ? 'progress-danger' : pct >= 70 ? 'progress-warn' : 'progress-ok';
+      const lbl = ch.quota_daily_per_model > 0
+        ? count + ' / ' + ch.quota_daily_per_model + '  (' + pct + '%)'
+        : count;
+      return '<div class="usage-row">' +
+        '<div class="usage-label"><span>' + esc(m) + '</span><span class="usage-val">' + lbl + '</span></div>' +
+        '<div class="progress-bar"><div class="progress-fill ' + cls + '" style="width:' + (ch.quota_daily_per_model > 0 ? pct : Math.min(count, 100)) + '%"></div></div>' +
+        '</div>';
+    }).join('');
+
+    const statusDot = ch.enabled
+      ? '<span style="width:8px;height:8px;border-radius:50%;background:var(--success);display:inline-block"></span>'
+      : '<span style="width:8px;height:8px;border-radius:50%;background:var(--danger);display:inline-block"></span>';
+
+    return '<div class="usage-card">' +
+      '<h4>' + statusDot + ' ' + esc(ch.channel_name) + '</h4>' +
+      '<div class="usage-row">' +
+        '<div class="usage-label"><span>' + t('totalUsage') + '</span><span class="usage-val">' + totalLabel + '</span></div>' +
+        '<div class="progress-bar"><div class="progress-fill ' + totalClass + '" style="width:' + (ch.quota_daily_total > 0 ? totalPct : Math.min(ch.usage.total / 20, 100)) + '%"></div></div>' +
+      '</div>' +
+      (modelRows ? '<div style="margin-top:16px"><div style="font-size:13px;color:var(--text-2);margin-bottom:10px;text-transform:uppercase;letter-spacing:.5px">' + t('perModelUsage') + '</div>' + modelRows + '</div>' : '') +
+    '</div>';
+  }).join('');
 }
 
 // ============ Shared ============

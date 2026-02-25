@@ -49,6 +49,47 @@ class KVStore {
   async setRRCounter(channelId, value) {
     await this.kv.put(`lb:rr:${channelId}`, String(value));
   }
+
+  // ── Usage tracking (bypass cache for freshness) ──
+
+  _todayKey() {
+    return new Date().toISOString().slice(0, 10);
+  }
+
+  async getUsage(channelId, date) {
+    const key = `usage:${channelId}:${date || this._todayKey()}`;
+    try {
+      return (await this.kv.get(key, 'json')) || { total: 0, models: {} };
+    } catch {
+      return { total: 0, models: {} };
+    }
+  }
+
+  async incrementUsage(channelId, model) {
+    const date = this._todayKey();
+    const key = `usage:${channelId}:${date}`;
+    const usage = await this.getUsage(channelId, date);
+    usage.total += 1;
+    if (model) {
+      usage.models[model] = (usage.models[model] || 0) + 1;
+    }
+    await this.kv.put(key, JSON.stringify(usage));
+    return usage;
+  }
+
+  async checkQuota(channel, model) {
+    if (!channel.quota_enabled) return { allowed: true };
+    const usage = await this.getUsage(channel.id);
+
+    if (channel.quota_daily_total > 0 && usage.total >= channel.quota_daily_total) {
+      return { allowed: false, reason: 'daily_total', usage };
+    }
+    if (model && channel.quota_daily_per_model > 0 &&
+        (usage.models[model] || 0) >= channel.quota_daily_per_model) {
+      return { allowed: false, reason: 'model_limit', usage };
+    }
+    return { allowed: true, usage };
+  }
 }
 
 export function createStore(kv) {

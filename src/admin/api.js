@@ -24,6 +24,9 @@ export async function handleAdminApi(request, env, store) {
         enabled: data.enabled !== false,
         priority: parseInt(data.priority) || 0,
         weight: Math.max(1, parseInt(data.weight) || 1),
+        quota_enabled: !!data.quota_enabled,
+        quota_daily_total: Math.max(0, parseInt(data.quota_daily_total) || 0),
+        quota_daily_per_model: Math.max(0, parseInt(data.quota_daily_per_model) || 0),
         created_at: new Date().toISOString(),
       };
       channels.push(channel);
@@ -52,7 +55,10 @@ export async function handleAdminApi(request, env, store) {
           enabled: data.enabled ?? ch.enabled,
           priority: data.priority !== undefined ? (parseInt(data.priority) || 0) : ch.priority,
           weight: data.weight !== undefined ? Math.max(1, parseInt(data.weight) || 1) : ch.weight,
-          id, // preserve id
+          quota_enabled: data.quota_enabled !== undefined ? !!data.quota_enabled : (ch.quota_enabled || false),
+          quota_daily_total: data.quota_daily_total !== undefined ? Math.max(0, parseInt(data.quota_daily_total) || 0) : (ch.quota_daily_total || 0),
+          quota_daily_per_model: data.quota_daily_per_model !== undefined ? Math.max(0, parseInt(data.quota_daily_per_model) || 0) : (ch.quota_daily_per_model || 0),
+          id,
         };
         await store.saveChannels(channels);
         return jsonRes(channels[idx]);
@@ -77,6 +83,28 @@ export async function handleAdminApi(request, env, store) {
       channels[idx].enabled = !channels[idx].enabled;
       await store.saveChannels(channels);
       return jsonRes(channels[idx]);
+    }
+
+    // --- Usage ---
+    if (path === '/usage' && method === 'GET') {
+      const date = url.searchParams.get('date') || new Date().toISOString().slice(0, 10);
+      const channels = await store.getChannels();
+      const quotaChannels = channels.filter(ch => ch.quota_enabled);
+      const usageData = await Promise.all(
+        quotaChannels.map(async ch => {
+          const usage = await store.getUsage(ch.id, date);
+          return {
+            channel_id: ch.id,
+            channel_name: ch.name,
+            enabled: ch.enabled,
+            quota_daily_total: ch.quota_daily_total,
+            quota_daily_per_model: ch.quota_daily_per_model,
+            models: ch.models || [],
+            usage,
+          };
+        })
+      );
+      return jsonRes({ date, channels: usageData });
     }
 
     // --- API Keys ---

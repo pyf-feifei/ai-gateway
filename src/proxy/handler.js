@@ -78,9 +78,15 @@ async function handleClaudeMessages(request, url, claudeBody, store) {
 
       if (resp.ok || resp.status < 500) {
         if (!resp.ok) {
-          // 4xx from upstream — forward as Claude-shaped error
           const errBody = await resp.text();
           return claudeErrorRes(`Upstream error: ${errBody}`, resp.status);
+        }
+
+        // Increment usage counter (fire-and-forget)
+        if (target.channel.quota_enabled) {
+          store.incrementUsage(target.channel.id, model).catch(e =>
+            console.error('[usage] increment failed:', e)
+          );
         }
 
         // ---- Streaming ----
@@ -156,6 +162,13 @@ async function handleOpenAIProxy(request, url, path, body, store) {
 
       // Success or client-side error (4xx) — return immediately, don't retry
       if (resp.ok || resp.status < 500) {
+        // Increment usage counter on success (fire-and-forget)
+        if (resp.ok && target.channel.quota_enabled) {
+          store.incrementUsage(target.channel.id, model).catch(e =>
+            console.error('[usage] increment failed:', e)
+          );
+        }
+
         const respHeaders = new Headers();
         const ct = resp.headers.get('Content-Type');
         if (ct) respHeaders.set('Content-Type', ct);
