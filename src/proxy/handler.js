@@ -111,6 +111,11 @@ async function handleClaudeMessages(request, url, claudeBody, store, allowedChan
         }
 
         const openaiData = await resp.json();
+        if (!Array.isArray(openaiData.choices)) {
+          lastError = `upstream returned invalid response (choices=${openaiData.choices})`;
+          logError(store, target, model, 200, lastError);
+          continue;
+        }
         const claudeResponse = openAIToClaude(openaiData, model);
         return jsonRes(claudeResponse, 200);
       }
@@ -189,12 +194,24 @@ async function handleOpenAIProxy(request, url, path, body, store, allowedChannel
 
         if (body.stream) {
           respHeaders.set('Cache-Control', 'no-cache');
+          return new Response(resp.body, { status: resp.status, headers: respHeaders });
         }
 
-        return new Response(resp.body, {
-          status: resp.status,
-          headers: respHeaders,
-        });
+        // Non-streaming: validate chat/completions responses
+        if (resp.ok && upstreamPath.includes('/chat/completions')) {
+          const respText = await resp.text();
+          try {
+            const data = JSON.parse(respText);
+            if (!Array.isArray(data.choices)) {
+              lastError = `upstream returned invalid response (choices=${data.choices})`;
+              logError(store, target, model, 200, lastError);
+              continue;
+            }
+          } catch { /* not valid JSON — pass through as-is */ }
+          return new Response(respText, { status: resp.status, headers: respHeaders });
+        }
+
+        return new Response(resp.body, { status: resp.status, headers: respHeaders });
       }
 
       lastError = `HTTP ${resp.status}`;
