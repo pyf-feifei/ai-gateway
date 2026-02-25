@@ -1,8 +1,6 @@
 /**
- * Supabase REST API-based KV storage. Uses PostgREST over HTTPS,
- * avoiding IPv6/direct-connection issues on platforms like HF Spaces.
- *
- * Requires a `kv_store` table in Supabase (auto-created on first use via RPC).
+ * Supabase Storage-based KV. Stores each key as a JSON file in a private bucket.
+ * Works entirely over HTTPS — no IPv6 / direct PG connection issues.
  *
  * Interface (same as Cloudflare KV / FileKV):
  *   await kv.get(key, 'json') -> parsed object or null
@@ -10,58 +8,42 @@
  *   await kv.put(key, value)  -> void
  */
 
+const BUCKET = 'kv-store';
+
 export class SupabaseKV {
   constructor(supabaseUrl, supabaseKey) {
-    this.restUrl = `${supabaseUrl.replace(/\/+$/, '')}/rest/v1`;
+    this.storageUrl = `${supabaseUrl.replace(/\/+$/, '')}/storage/v1`;
     this.headers = {
       apikey: supabaseKey,
       Authorization: `Bearer ${supabaseKey}`,
-      'Content-Type': 'application/json',
     };
-    this._ready = this._ensureTable(supabaseUrl, supabaseKey);
+    this._ready = this._ensureBucket();
   }
 
-  async _ensureTable(supabaseUrl, key) {
-    const rpcUrl = `${supabaseUrl.replace(/\/+$/, '')}/rest/v1/rpc/exec_sql`;
-
-    const res = await fetch(rpcUrl, {
-      method: 'POST',
+  async _ensureBucket() {
+    const res = await fetch(`${this.storageUrl}/bucket/${BUCKET}`, {
       headers: this.headers,
-      body: JSON.stringify({
-        query: `CREATE TABLE IF NOT EXISTS kv_store (
-          key   TEXT PRIMARY KEY,
-          value TEXT NOT NULL,
-          updated_at TIMESTAMPTZ DEFAULT NOW()
-        )`,
-      }),
     });
-
     if (res.ok) return;
 
-    // If the RPC function doesn't exist, try a test read instead.
-    // Table might already exist — verify by querying it.
-    const probe = await fetch(`${this.restUrl}/kv_store?select=key&limit=0`, {
-      headers: this.headers,
+    await fetch(`${this.storageUrl}/bucket`, {
+      method: 'POST',
+      headers: { ...this.headers, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: BUCKET, name: BUCKET, public: false }),
     });
+  }
 
-    if (probe.ok) return;
-
-    console.error(
-      'kv_store table does not exist. Please create it in Supabase SQL Editor:\n' +
-        'CREATE TABLE kv_store (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TIMESTAMPTZ DEFAULT NOW());',
-    );
+  _objectUrl(key) {
+    const safe = key.replace(/[^a-zA-Z0-9_-]/g, '_');
+    return `${this.storageUrl}/object/${BUCKET}/${safe}.json`;
   }
 
   async get(key, format) {
     await this._ready;
-    const url = `${this.restUrl}/kv_store?key=eq.${encodeURIComponent(key)}&select=value`;
-    const res = await fetch(url, { headers: this.headers });
-
+    const res = await fetch(this._objectUrl(key), { headers: this.headers });
     if (!res.ok) return null;
-    const rows = await res.json();
-    if (!rows.length) return null;
 
-    const raw = rows[0].value;
+    const raw = await res.text();
     if (format === 'json') {
       try { return JSON.parse(raw); } catch { return null; }
     }
@@ -70,17 +52,14 @@ export class SupabaseKV {
 
   async put(key, value) {
     await this._ready;
-    await fetch(`${this.restUrl}/kv_store`, {
+    await fetch(this._objectUrl(key), {
       method: 'POST',
       headers: {
         ...this.headers,
-        Prefer: 'resolution=merge-duplicates',
+        'Content-Type': 'application/octet-stream',
+        'x-upsert': 'true',
       },
-      body: JSON.stringify({
-        key,
-        value: String(value),
-        updated_at: new Date().toISOString(),
-      }),
+      body: String(value),
     });
   }
 }
