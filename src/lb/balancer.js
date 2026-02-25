@@ -18,10 +18,34 @@ export class LoadBalancer {
       enabled = enabled.filter(ch => allowedChannelIds.includes(ch.id));
     }
 
-    // Filter channels that support this model
+    // For channels without a configured model list, resolve their actual models
+    // from the cache (populated by /v1/models) or by fetching upstream on demand.
+    const discoveredModels = new Map();
+    const needDiscovery = enabled.filter(ch => !ch.models || ch.models.length === 0);
+    if (needDiscovery.length > 0) {
+      await Promise.all(needDiscovery.map(async ch => {
+        let cached = await this.store.getModelCache(ch.id);
+        if (!cached) {
+          cached = await this._fetchUpstreamModels(ch);
+          if (cached && cached.length > 0) {
+            await this.store.setModelCache(ch.id, cached).catch(() => {});
+          }
+        }
+        if (cached && cached.length > 0) {
+          discoveredModels.set(ch.id, cached);
+        }
+      }));
+    }
+
     const compatible = enabled.filter(ch => {
-      if (!ch.models || ch.models.length === 0) return true; // accepts all
-      return ch.models.some(m => m === model || model.startsWith(m));
+      if (ch.models && ch.models.length > 0) {
+        return ch.models.some(m => m === model || model.startsWith(m));
+      }
+      const cached = discoveredModels.get(ch.id);
+      if (cached) {
+        return cached.some(m => m === model || model.startsWith(m));
+      }
+      return true; // no info available yet, accept as fallback
     });
 
     if (compatible.length === 0) {
@@ -99,6 +123,28 @@ export class LoadBalancer {
       items.splice(idx, 1);
     }
     return result;
+  }
+
+  /**
+   * Fetch the model list from a channel's upstream /models endpoint.
+   * Returns an array of model ID strings, or null on failure.
+   */
+  async _fetchUpstreamModels(ch) {
+    if (!ch.keys?.length) return null;
+    const baseUrl = ch.base_url.replace(/\/+$/, '');
+    try {
+      const resp = await fetch(baseUrl + '/models', {
+        headers: { 'Authorization': `Bearer ${ch.keys[0]}` },
+      });
+      if (!resp.ok) return null;
+      const data = await resp.json();
+      if (data?.data && Array.isArray(data.data)) {
+        return data.data.map(m => m.id);
+      }
+    } catch (e) {
+      console.warn(`[lb] Failed to fetch models from ${ch.name}:`, e.message);
+    }
+    return null;
   }
 
   /**

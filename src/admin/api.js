@@ -61,6 +61,7 @@ export async function handleAdminApi(request, env, store) {
           id,
         };
         await store.saveChannels(channels);
+        store.invalidateModelCache(id);
         return jsonRes(channels[idx]);
       }
 
@@ -69,6 +70,7 @@ export async function handleAdminApi(request, env, store) {
         const filtered = channels.filter(ch => ch.id !== id);
         if (filtered.length === channels.length) return jsonRes({ error: 'Channel not found' }, 404);
         await store.saveChannels(filtered);
+        store.invalidateModelCache(id);
         return jsonRes({ success: true });
       }
     }

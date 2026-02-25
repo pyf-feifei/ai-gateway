@@ -227,11 +227,10 @@ async function handleModels(store, allowedChannelIds) {
 
   const fetchPromises = enabled.map(async (ch) => {
     if (ch.models?.length > 0) {
-      // Use explicitly configured models
+      store.setModelCache(ch.id, ch.models).catch(() => {});
       return ch.models.map(m => ({ id: m, owned_by: ch.name }));
     }
 
-    // Fetch from upstream /models endpoint
     if (!ch.keys?.length) return [];
     const baseUrl = ch.base_url.replace(/\/+$/, '');
     try {
@@ -241,6 +240,10 @@ async function handleModels(store, allowedChannelIds) {
       if (!resp.ok) return [];
       const data = await resp.json();
       if (data?.data && Array.isArray(data.data)) {
+        const modelIds = data.data.map(m => m.id);
+        store.setModelCache(ch.id, modelIds).catch(e =>
+          console.error(`[models] cache write failed for ${ch.name}:`, e)
+        );
         return data.data.map(m => ({
           id: m.id,
           owned_by: m.owned_by || ch.name,

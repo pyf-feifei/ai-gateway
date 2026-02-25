@@ -85,6 +85,20 @@ class KVStore {
     return allUsage[kid];
   }
 
+  // ── Per-channel model cache (populated by /models and LoadBalancer) ──
+
+  async getModelCache(channelId) {
+    return await this.get(`model-cache:${channelId}`);
+  }
+
+  async setModelCache(channelId, modelIds) {
+    await this.set(`model-cache:${channelId}`, modelIds);
+  }
+
+  invalidateModelCache(channelId) {
+    this.invalidate(`model-cache:${channelId}`);
+  }
+
   checkQuotaWithData(channel, apiKey, model, usageData) {
     if (!channel.quota_enabled) return { allowed: true };
     const kid = this._keyId(apiKey);
