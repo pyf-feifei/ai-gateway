@@ -326,6 +326,7 @@ const I18N = {
     usageDate: 'Date',
     refreshUsage: 'Refresh',
     quota: 'Quota',
+    noModelUsageYet: 'No requests yet',
   },
   zh: {
     loginSub: '请输入管理员密码或 API Key 继续',
@@ -418,6 +419,7 @@ const I18N = {
     usageDate: '日期',
     refreshUsage: '刷新',
     quota: '配额',
+    noModelUsageYet: '暂无请求记录',
   },
 };
 
@@ -795,46 +797,57 @@ function renderUsage() {
     return;
   }
   container.innerHTML = usageData.channels.map(ch => {
-    const totalPct = ch.quota_daily_total > 0
-      ? Math.min(100, Math.round(ch.usage.total / ch.quota_daily_total * 100))
-      : 0;
-    const totalClass = totalPct >= 90 ? 'progress-danger' : totalPct >= 70 ? 'progress-warn' : 'progress-ok';
-    const totalLabel = ch.quota_daily_total > 0
-      ? ch.usage.total + ' / ' + ch.quota_daily_total + '  (' + totalPct + '%)'
-      : ch.usage.total + ' (' + t('unlimited') + ')';
-
-    const modelNames = Object.keys(ch.usage.models || {});
-    if (ch.models?.length) {
-      ch.models.forEach(m => { if (!modelNames.includes(m)) modelNames.push(m); });
-    }
-    modelNames.sort();
-
-    const modelRows = modelNames.map(m => {
-      const count = ch.usage.models?.[m] || 0;
-      const pct = ch.quota_daily_per_model > 0
-        ? Math.min(100, Math.round(count / ch.quota_daily_per_model * 100))
-        : 0;
-      const cls = pct >= 90 ? 'progress-danger' : pct >= 70 ? 'progress-warn' : 'progress-ok';
-      const lbl = ch.quota_daily_per_model > 0
-        ? count + ' / ' + ch.quota_daily_per_model + '  (' + pct + '%)'
-        : count;
-      return '<div class="usage-row">' +
-        '<div class="usage-label"><span>' + esc(m) + '</span><span class="usage-val">' + lbl + '</span></div>' +
-        '<div class="progress-bar"><div class="progress-fill ' + cls + '" style="width:' + (ch.quota_daily_per_model > 0 ? pct : Math.min(count, 100)) + '%"></div></div>' +
-        '</div>';
-    }).join('');
-
     const statusDot = ch.enabled
       ? '<span style="width:8px;height:8px;border-radius:50%;background:var(--success);display:inline-block"></span>'
       : '<span style="width:8px;height:8px;border-radius:50%;background:var(--danger);display:inline-block"></span>';
 
+    const limitInfo = '<span style="color:var(--text-2);font-size:13px;font-weight:400">' +
+      t('dailyTotalLimit') + ': ' + (ch.quota_daily_total || '∞') +
+      ' · ' + t('dailyPerModelLimit') + ': ' + (ch.quota_daily_per_model || '∞') + '</span>';
+
+    const keyCards = (ch.keys || []).map(k => {
+      const u = k.usage;
+      const totalPct = ch.quota_daily_total > 0
+        ? Math.min(100, Math.round(u.total / ch.quota_daily_total * 100))
+        : 0;
+      const totalClass = totalPct >= 90 ? 'progress-danger' : totalPct >= 70 ? 'progress-warn' : 'progress-ok';
+      const totalLabel = ch.quota_daily_total > 0
+        ? u.total + ' / ' + ch.quota_daily_total + '  (' + totalPct + '%)'
+        : u.total + ' (' + t('unlimited') + ')';
+
+      const modelNames = Object.keys(u.models || {}).sort();
+
+      const modelRows = modelNames.map(m => {
+        const count = u.models[m] || 0;
+        const pct = ch.quota_daily_per_model > 0
+          ? Math.min(100, Math.round(count / ch.quota_daily_per_model * 100))
+          : 0;
+        const cls = pct >= 90 ? 'progress-danger' : pct >= 70 ? 'progress-warn' : 'progress-ok';
+        const lbl = ch.quota_daily_per_model > 0
+          ? count + ' / ' + ch.quota_daily_per_model + '  (' + pct + '%)'
+          : String(count);
+        return '<div class="usage-row">' +
+          '<div class="usage-label"><span style="font-family:monospace;font-size:12px">' + esc(m) + '</span><span class="usage-val">' + lbl + '</span></div>' +
+          '<div class="progress-bar"><div class="progress-fill ' + cls + '" style="width:' + (ch.quota_daily_per_model > 0 ? pct : Math.min(count / 5, 100)) + '%"></div></div>' +
+          '</div>';
+      }).join('');
+
+      return '<div style="background:var(--bg-1);border:1px solid var(--border);border-radius:6px;padding:16px;margin-bottom:10px">' +
+        '<div style="font-family:monospace;font-size:13px;color:var(--primary);margin-bottom:10px">' + esc(k.key_hint) + '</div>' +
+        '<div class="usage-row">' +
+          '<div class="usage-label"><span>' + t('totalUsage') + '</span><span class="usage-val">' + totalLabel + '</span></div>' +
+          '<div class="progress-bar"><div class="progress-fill ' + totalClass + '" style="width:' + (ch.quota_daily_total > 0 ? totalPct : Math.min(u.total / 20, 100)) + '%"></div></div>' +
+        '</div>' +
+        (modelRows
+          ? '<div style="margin-top:12px"><div style="font-size:12px;color:var(--text-2);margin-bottom:8px;text-transform:uppercase;letter-spacing:.5px">' + t('perModelUsage') + '</div>' + modelRows + '</div>'
+          : '<div style="margin-top:8px;font-size:12px;color:var(--text-2)">' + t('noModelUsageYet') + '</div>') +
+      '</div>';
+    }).join('');
+
     return '<div class="usage-card">' +
       '<h4>' + statusDot + ' ' + esc(ch.channel_name) + '</h4>' +
-      '<div class="usage-row">' +
-        '<div class="usage-label"><span>' + t('totalUsage') + '</span><span class="usage-val">' + totalLabel + '</span></div>' +
-        '<div class="progress-bar"><div class="progress-fill ' + totalClass + '" style="width:' + (ch.quota_daily_total > 0 ? totalPct : Math.min(ch.usage.total / 20, 100)) + '%"></div></div>' +
-      '</div>' +
-      (modelRows ? '<div style="margin-top:16px"><div style="font-size:13px;color:var(--text-2);margin-bottom:10px;text-transform:uppercase;letter-spacing:.5px">' + t('perModelUsage') + '</div>' + modelRows + '</div>' : '') +
+      '<div style="margin-bottom:14px">' + limitInfo + '</div>' +
+      keyCards +
     '</div>';
   }).join('');
 }

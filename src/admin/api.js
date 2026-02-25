@@ -92,15 +92,23 @@ export async function handleAdminApi(request, env, store) {
       const quotaChannels = channels.filter(ch => ch.quota_enabled);
       const usageData = await Promise.all(
         quotaChannels.map(async ch => {
-          const usage = await store.getUsage(ch.id, date);
+          const rawUsage = await store.getUsage(ch.id, date);
+          const keys = (ch.keys || []).map(k => {
+            const kid = k.slice(-8);
+            const usage = rawUsage[kid] || { total: 0, models: {} };
+            return {
+              key_id: kid,
+              key_hint: k.length > 12 ? k.slice(0, 7) + '...' + k.slice(-4) : k,
+              usage,
+            };
+          });
           return {
             channel_id: ch.id,
             channel_name: ch.name,
             enabled: ch.enabled,
             quota_daily_total: ch.quota_daily_total,
             quota_daily_per_model: ch.quota_daily_per_model,
-            models: ch.models || [],
-            usage,
+            keys,
           };
         })
       );

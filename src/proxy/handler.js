@@ -82,9 +82,8 @@ async function handleClaudeMessages(request, url, claudeBody, store) {
           return claudeErrorRes(`Upstream error: ${errBody}`, resp.status);
         }
 
-        // Increment usage counter (fire-and-forget)
         if (target.channel.quota_enabled) {
-          store.incrementUsage(target.channel.id, model).catch(e =>
+          store.incrementUsage(target.channel.id, target.key, model).catch(e =>
             console.error('[usage] increment failed:', e)
           );
         }
@@ -162,9 +161,8 @@ async function handleOpenAIProxy(request, url, path, body, store) {
 
       // Success or client-side error (4xx) — return immediately, don't retry
       if (resp.ok || resp.status < 500) {
-        // Increment usage counter on success (fire-and-forget)
         if (resp.ok && target.channel.quota_enabled) {
-          store.incrementUsage(target.channel.id, model).catch(e =>
+          store.incrementUsage(target.channel.id, target.key, model).catch(e =>
             console.error('[usage] increment failed:', e)
           );
         }

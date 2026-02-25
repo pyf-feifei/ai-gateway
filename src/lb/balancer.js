@@ -22,23 +22,20 @@ export class LoadBalancer {
       return { targets: [], error: 'No available channel for model: ' + model };
     }
 
-    // Filter out channels that exceeded their quota
-    const quotaResults = await Promise.all(
-      compatible.map(ch => this.store.checkQuota(ch, model))
-    );
-    const withinQuota = compatible.filter((_, i) => quotaResults[i].allowed);
-
-    if (withinQuota.length === 0) {
-      const overQuota = quotaResults.find(r => !r.allowed);
-      const reason = overQuota?.reason === 'model_limit'
-        ? `Model "${model}" has reached its daily per-model limit`
-        : 'Daily total quota exceeded for all available channels';
-      return { targets: [], error: reason };
+    // Pre-load usage data for quota-enabled channels (one KV read per channel)
+    const usageMap = new Map();
+    const quotaChannels = compatible.filter(ch => ch.quota_enabled);
+    if (quotaChannels.length > 0) {
+      await Promise.all(
+        quotaChannels.map(async ch => {
+          usageMap.set(ch.id, await this.store.getUsage(ch.id));
+        })
+      );
     }
 
     // Group by priority (lower number = higher priority)
     const groups = {};
-    for (const ch of withinQuota) {
+    for (const ch of compatible) {
       const p = ch.priority ?? 0;
       if (!groups[p]) groups[p] = [];
       groups[p].push(ch);
@@ -47,16 +44,31 @@ export class LoadBalancer {
     const priorities = Object.keys(groups).map(Number).sort((a, b) => a - b);
 
     // Build ordered target list
-    const targets = [];
+    const allTargets = [];
     for (const p of priorities) {
       const group = groups[p];
       const sorted = this.weightedShuffle(group);
       for (const ch of sorted) {
         const keys = await this.getOrderedKeys(ch);
         for (const key of keys) {
-          targets.push({ channel: ch, key });
+          allTargets.push({ channel: ch, key });
         }
       }
+    }
+
+    // Filter targets by per-key quota
+    const targets = allTargets.filter(t => {
+      if (!t.channel.quota_enabled) return true;
+      const usageData = usageMap.get(t.channel.id) || {};
+      return this.store.checkQuotaWithData(t.channel, t.key, model, usageData).allowed;
+    });
+
+    if (targets.length === 0 && allTargets.length > 0) {
+      return { targets: [], error: 'All keys have exceeded their quota limits for model: ' + model };
+    }
+
+    if (targets.length === 0) {
+      return { targets: [], error: 'No available channel for model: ' + model };
     }
 
     return { targets };

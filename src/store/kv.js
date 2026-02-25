@@ -50,45 +50,54 @@ class KVStore {
     await this.kv.put(`lb:rr:${channelId}`, String(value));
   }
 
-  // ── Usage tracking (bypass cache for freshness) ──
+  // ── Per-key usage tracking (bypass cache for freshness) ──
+  // Storage format: usage:{channelId}:{date} → { "keyId1": { total, models: { m: N } }, ... }
 
   _todayKey() {
     return new Date().toISOString().slice(0, 10);
   }
 
+  _keyId(apiKey) {
+    return apiKey.slice(-8);
+  }
+
   async getUsage(channelId, date) {
     const key = `usage:${channelId}:${date || this._todayKey()}`;
     try {
-      return (await this.kv.get(key, 'json')) || { total: 0, models: {} };
+      return (await this.kv.get(key, 'json')) || {};
     } catch {
-      return { total: 0, models: {} };
+      return {};
     }
   }
 
-  async incrementUsage(channelId, model) {
+  async incrementUsage(channelId, apiKey, model) {
     const date = this._todayKey();
-    const key = `usage:${channelId}:${date}`;
-    const usage = await this.getUsage(channelId, date);
-    usage.total += 1;
+    const kvKey = `usage:${channelId}:${date}`;
+    const allUsage = await this.getUsage(channelId, date);
+    const kid = this._keyId(apiKey);
+
+    if (!allUsage[kid]) allUsage[kid] = { total: 0, models: {} };
+    allUsage[kid].total += 1;
     if (model) {
-      usage.models[model] = (usage.models[model] || 0) + 1;
+      allUsage[kid].models[model] = (allUsage[kid].models[model] || 0) + 1;
     }
-    await this.kv.put(key, JSON.stringify(usage));
-    return usage;
+    await this.kv.put(kvKey, JSON.stringify(allUsage));
+    return allUsage[kid];
   }
 
-  async checkQuota(channel, model) {
+  checkQuotaWithData(channel, apiKey, model, usageData) {
     if (!channel.quota_enabled) return { allowed: true };
-    const usage = await this.getUsage(channel.id);
+    const kid = this._keyId(apiKey);
+    const keyUsage = usageData[kid] || { total: 0, models: {} };
 
-    if (channel.quota_daily_total > 0 && usage.total >= channel.quota_daily_total) {
-      return { allowed: false, reason: 'daily_total', usage };
+    if (channel.quota_daily_total > 0 && keyUsage.total >= channel.quota_daily_total) {
+      return { allowed: false, reason: 'daily_total' };
     }
     if (model && channel.quota_daily_per_model > 0 &&
-        (usage.models[model] || 0) >= channel.quota_daily_per_model) {
-      return { allowed: false, reason: 'model_limit', usage };
+        (keyUsage.models[model] || 0) >= channel.quota_daily_per_model) {
+      return { allowed: false, reason: 'model_limit' };
     }
-    return { allowed: true, usage };
+    return { allowed: true };
   }
 }
 
