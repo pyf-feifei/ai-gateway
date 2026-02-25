@@ -84,6 +84,15 @@ async function handleClaudeMessages(request, url, claudeBody, store, allowedChan
         continue;
       }
 
+      if (resp.status === 429) {
+        lastError = `HTTP 429 (rate limited)`;
+        logError(store, target, model, 429, lastError);
+        store.markRateLimited(target.channel.id, target.key, model).catch(e =>
+          console.error('[ratelimit] mark failed:', e)
+        );
+        continue;
+      }
+
       if (resp.ok || resp.status < 500) {
         if (!resp.ok) {
           const errBody = await resp.text();
@@ -173,6 +182,15 @@ async function handleOpenAIProxy(request, url, path, body, store, allowedChannel
       if (resp.status === 404) {
         lastError = `HTTP 404 (model not found)`;
         logError(store, target, model, 404, lastError);
+        continue;
+      }
+
+      if (resp.status === 429) {
+        lastError = `HTTP 429 (rate limited)`;
+        logError(store, target, model, 429, lastError);
+        store.markRateLimited(target.channel.id, target.key, model).catch(e =>
+          console.error('[ratelimit] mark failed:', e)
+        );
         continue;
       }
 

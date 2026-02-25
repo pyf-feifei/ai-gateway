@@ -54,7 +54,9 @@ class KVStore {
   // Storage format: usage:{channelId}:{date} → { "keyId1": { total, models: { m: N } }, ... }
 
   _todayKey() {
-    return new Date().toISOString().slice(0, 10);
+    const now = new Date();
+    const beijing = new Date(now.getTime() + 8 * 60 * 60 * 1000);
+    return beijing.toISOString().slice(0, 10);
   }
 
   _keyId(apiKey) {
@@ -114,6 +116,39 @@ class KVStore {
 
   invalidateModelCache(channelId) {
     this.invalidate(`model-cache:${channelId}`);
+  }
+
+  // ── 429 rate-limit tracking (per key+model, per day) ──
+  // Storage: ratelimit:{channelId}:{date} → { "keyId": ["model1", "model2"], ... }
+
+  async markRateLimited(channelId, apiKey, model) {
+    const date = this._todayKey();
+    const kvKey = `ratelimit:${channelId}:${date}`;
+    let data;
+    try { data = (await this.kv.get(kvKey, 'json')) || {}; } catch { data = {}; }
+    const kid = this._keyId(apiKey);
+    if (!data[kid]) data[kid] = [];
+    if (!data[kid].includes(model)) {
+      data[kid].push(model);
+    }
+    await this.kv.put(kvKey, JSON.stringify(data));
+    this.cache.set(kvKey, { value: data, time: Date.now() });
+  }
+
+  async getRateLimits(channelId, date) {
+    const kvKey = `ratelimit:${channelId}:${date || this._todayKey()}`;
+    try {
+      return (await this.kv.get(kvKey, 'json')) || {};
+    } catch {
+      return {};
+    }
+  }
+
+  isRateLimitedWithData(apiKey, model, rateLimitData) {
+    const kid = this._keyId(apiKey);
+    const models = rateLimitData[kid];
+    if (!models) return false;
+    return models.includes(model);
   }
 
   checkQuotaWithData(channel, apiKey, model, usageData) {
