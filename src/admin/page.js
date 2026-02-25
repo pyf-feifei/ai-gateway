@@ -205,6 +205,10 @@ label{display:block;margin-bottom:6px;font-size:13px;color:var(--text-1);font-we
         <input type="date" id="usage-date" onchange="loadUsage()">
       </div>
       <div id="usage-container"></div>
+      <div style="margin-top:32px">
+        <div class="section-header"><h2 id="error-title"></h2></div>
+        <div id="error-container"></div>
+      </div>
     </section>
 
     <!-- API Keys -->
@@ -332,6 +336,14 @@ const I18N = {
     selectChannels: 'Select Channels',
     channelBindHelp: 'Only route to selected channels. Empty = all channels.',
     editKey: 'Edit Key',
+    errorLogs: 'Error Logs',
+    noErrors: 'No errors today.',
+    errorTime: 'Time',
+    errorModel: 'Model',
+    errorStatus: 'Status',
+    errorMessage: 'Message',
+    errorKey: 'Key',
+    errorsToday: 'errors today',
   },
   zh: {
     loginSub: '请输入管理员密码或 API Key 继续',
@@ -430,6 +442,14 @@ const I18N = {
     selectChannels: '选择渠道',
     channelBindHelp: '仅路由到选中的渠道。不选则使用全部渠道。',
     editKey: '编辑密钥',
+    errorLogs: '错误日志',
+    noErrors: '今日暂无错误。',
+    errorTime: '时间',
+    errorModel: '模型',
+    errorStatus: '状态码',
+    errorMessage: '错误信息',
+    errorKey: '密钥',
+    errorsToday: '个错误',
   },
 };
 
@@ -853,6 +873,7 @@ function renderUsageHeaders() {
   document.getElementById('usage-title').textContent = t('usageMonitor');
   document.getElementById('usage-refresh-btn').textContent = t('refreshUsage');
   document.getElementById('usage-date-label').textContent = t('usageDate');
+  document.getElementById('error-title').textContent = t('errorLogs');
   const dateInput = document.getElementById('usage-date');
   if (!dateInput.value) {
     dateInput.value = new Date().toISOString().slice(0, 10);
@@ -861,11 +882,9 @@ function renderUsageHeaders() {
 
 async function loadUsage() {
   const date = document.getElementById('usage-date').value || new Date().toISOString().slice(0, 10);
-  const data = await api('/usage?date=' + date);
-  if (data) {
-    usageData = data;
-    renderUsage();
-  }
+  const [data, errData] = await Promise.all([api('/usage?date=' + date), api('/errors?date=' + date)]);
+  if (data) { usageData = data; renderUsage(); }
+  renderErrors(errData);
 }
 
 function renderUsage() {
@@ -926,6 +945,51 @@ function renderUsage() {
       '<h4>' + statusDot + ' ' + esc(ch.channel_name) + '</h4>' +
       '<div style="margin-bottom:14px">' + limitInfo + '</div>' +
       keyCards +
+    '</div>';
+  }).join('');
+}
+
+function renderErrors(errData) {
+  const container = document.getElementById('error-container');
+  if (!errData || !errData.channels || errData.channels.length === 0) {
+    container.innerHTML = '<div class="empty">' + t('noErrors') + '</div>';
+    return;
+  }
+  container.innerHTML = errData.channels.map(ch => {
+    const errors = (ch.errors || []).slice().reverse();
+    const rows = errors.map(e => {
+      const time = e.time ? new Date(e.time).toLocaleTimeString() : '-';
+      const statusBadge = e.status >= 500
+        ? '<span class="badge badge-off">' + e.status + '</span>'
+        : e.status === 404
+          ? '<span class="badge" style="background:rgba(245,158,11,.12);color:var(--warning)">' + e.status + '</span>'
+          : e.status > 0
+            ? '<span class="badge" style="background:rgba(99,102,241,.12);color:var(--primary)">' + e.status + '</span>'
+            : '<span class="badge badge-off">ERR</span>';
+      return '<tr>' +
+        '<td style="white-space:nowrap;font-size:13px;color:var(--text-2)">' + time + '</td>' +
+        '<td style="font-family:monospace;font-size:13px">' + esc(e.model || '-') + '</td>' +
+        '<td>' + statusBadge + '</td>' +
+        '<td class="cell-truncate" title="' + esc(e.message) + '" style="font-size:13px">' + esc(e.message) + '</td>' +
+        '<td style="font-family:monospace;font-size:12px;color:var(--text-2)">' + esc(e.key_hint || '-') + '</td>' +
+      '</tr>';
+    }).join('');
+
+    return '<div class="usage-card">' +
+      '<h4 style="display:flex;align-items:center;gap:8px">' +
+        '<span style="width:8px;height:8px;border-radius:50%;background:var(--danger);display:inline-block"></span> ' +
+        esc(ch.channel_name) +
+        ' <span style="color:var(--text-2);font-size:13px;font-weight:400">' + errors.length + ' ' + t('errorsToday') + '</span>' +
+      '</h4>' +
+      '<div class="table-container" style="margin-top:12px">' +
+        '<table><thead><tr>' +
+          '<th>' + t('errorTime') + '</th>' +
+          '<th>' + t('errorModel') + '</th>' +
+          '<th>' + t('errorStatus') + '</th>' +
+          '<th>' + t('errorMessage') + '</th>' +
+          '<th>' + t('errorKey') + '</th>' +
+        '</tr></thead><tbody>' + rows + '</tbody></table>' +
+      '</div>' +
     '</div>';
   }).join('');
 }

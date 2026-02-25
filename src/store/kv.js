@@ -85,6 +85,23 @@ class KVStore {
     return allUsage[kid];
   }
 
+  // ── Error logs (per-channel, per-day, last 100 entries) ──
+
+  async appendError(channelId, entry) {
+    const date = this._todayKey();
+    const key = `errors:${channelId}:${date}`;
+    let logs;
+    try { logs = (await this.kv.get(key, 'json')) || []; } catch { logs = []; }
+    logs.push({ ...entry, time: new Date().toISOString() });
+    if (logs.length > 100) logs = logs.slice(-100);
+    await this.kv.put(key, JSON.stringify(logs));
+  }
+
+  async getErrors(channelId, date) {
+    const key = `errors:${channelId}:${date || this._todayKey()}`;
+    try { return (await this.kv.get(key, 'json')) || []; } catch { return []; }
+  }
+
   // ── Per-channel model cache (populated by /models and LoadBalancer) ──
 
   async getModelCache(channelId) {

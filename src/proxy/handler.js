@@ -78,16 +78,16 @@ async function handleClaudeMessages(request, url, claudeBody, store, allowedChan
         body: JSON.stringify(openaiBody),
       });
 
-      // 404 means upstream doesn't have this model — try next target
       if (resp.status === 404) {
-        lastError = `${target.channel.name}: HTTP 404 (model not found)`;
-        console.warn(`[proxy][claude] ${lastError}, trying next`);
+        lastError = `HTTP 404 (model not found)`;
+        logError(store, target, model, 404, lastError);
         continue;
       }
 
       if (resp.ok || resp.status < 500) {
         if (!resp.ok) {
           const errBody = await resp.text();
+          logError(store, target, model, resp.status, errBody);
           return claudeErrorRes(`Upstream error: ${errBody}`, resp.status);
         }
 
@@ -97,7 +97,6 @@ async function handleClaudeMessages(request, url, claudeBody, store, allowedChan
           );
         }
 
-        // ---- Streaming ----
         if (isStream) {
           const claudeStream = openAIStreamToClaudeStream(resp.body, model);
           return new Response(claudeStream, {
@@ -111,18 +110,16 @@ async function handleClaudeMessages(request, url, claudeBody, store, allowedChan
           });
         }
 
-        // ---- Non-streaming ----
         const openaiData = await resp.json();
         const claudeResponse = openAIToClaude(openaiData, model);
         return jsonRes(claudeResponse, 200);
       }
 
-      // 5xx — try next target
-      lastError = `${target.channel.name}: HTTP ${resp.status}`;
-      console.error(`[proxy][claude] target failed: ${lastError}`);
+      lastError = `HTTP ${resp.status}`;
+      logError(store, target, model, resp.status, lastError);
     } catch (err) {
-      lastError = `${target.channel.name}: ${err.message}`;
-      console.error(`[proxy][claude] target error: ${lastError}`);
+      lastError = err.message;
+      logError(store, target, model, 0, lastError);
     }
   }
 
@@ -168,15 +165,17 @@ async function handleOpenAIProxy(request, url, path, body, store, allowedChannel
         body: JSON.stringify(body),
       });
 
-      // 404 means upstream doesn't have this model — try next target
       if (resp.status === 404) {
-        lastError = `${target.channel.name}: HTTP 404 (model not found)`;
-        console.warn(`[proxy] ${lastError}, trying next`);
+        lastError = `HTTP 404 (model not found)`;
+        logError(store, target, model, 404, lastError);
         continue;
       }
 
-      // Success or client-side error (4xx) — return immediately, don't retry
       if (resp.ok || resp.status < 500) {
+        if (!resp.ok) {
+          logError(store, target, model, resp.status, `HTTP ${resp.status}`);
+        }
+
         if (resp.ok && target.channel.quota_enabled) {
           store.incrementUsage(target.channel.id, target.key, model).catch(e =>
             console.error('[usage] increment failed:', e)
@@ -198,12 +197,11 @@ async function handleOpenAIProxy(request, url, path, body, store, allowedChannel
         });
       }
 
-      // 5xx — try next target
-      lastError = `${target.channel.name}: HTTP ${resp.status}`;
-      console.error(`[proxy] target failed: ${lastError}`);
+      lastError = `HTTP ${resp.status}`;
+      logError(store, target, model, resp.status, lastError);
     } catch (err) {
-      lastError = `${target.channel.name}: ${err.message}`;
-      console.error(`[proxy] target error: ${lastError}`);
+      lastError = err.message;
+      logError(store, target, model, 0, lastError);
     }
   }
 
@@ -285,6 +283,13 @@ function jsonRes(body, status = 200) {
       'Access-Control-Allow-Origin': '*',
     },
   });
+}
+
+function logError(store, target, model, status, message) {
+  const hint = target.key.length > 12 ? target.key.slice(0, 7) + '...' + target.key.slice(-4) : target.key;
+  store.appendError(target.channel.id, {
+    model, status, message: String(message).slice(0, 200), key_hint: hint,
+  }).catch(e => console.error('[errorlog] write failed:', e));
 }
 
 function claudeErrorRes(message, status = 500) {

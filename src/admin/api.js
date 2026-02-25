@@ -117,6 +117,20 @@ export async function handleAdminApi(request, env, store) {
       return jsonRes({ date, channels: usageData });
     }
 
+    // --- Error Logs ---
+    if (path === '/errors' && method === 'GET') {
+      const date = url.searchParams.get('date') || new Date().toISOString().slice(0, 10);
+      const channels = await store.getChannels();
+      const errorData = await Promise.all(
+        channels.map(async ch => ({
+          channel_id: ch.id,
+          channel_name: ch.name,
+          errors: await store.getErrors(ch.id, date),
+        }))
+      );
+      return jsonRes({ date, channels: errorData.filter(d => d.errors.length > 0) });
+    }
+
     // --- API Keys ---
     if (path === '/apikeys' && method === 'GET') {
       return jsonRes(await store.getApiKeys());
