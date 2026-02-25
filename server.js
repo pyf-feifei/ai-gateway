@@ -16,14 +16,21 @@ import worker from './src/index.js';
 import { FileKV } from './src/store/file-kv.js';
 
 const PORT = parseInt(process.env.PORT || '7860');
+const DATABASE_URL = process.env.DATABASE_URL;
 
-// Create file-based KV storage (drop-in replacement for Cloudflare KV)
-const fileKV = new FileKV();
+let kv;
+if (DATABASE_URL) {
+  const { PgKV } = await import('./src/store/pg-kv.js');
+  kv = new PgKV(DATABASE_URL);
+  console.log('Using PostgreSQL for persistent data storage');
+} else {
+  kv = new FileKV();
+  console.log('Using file-based storage (ephemeral on HF Spaces)');
+}
 
-// Simulate the Cloudflare Worker `env` object
 const env = {
   ADMIN_PASSWORD: process.env.ADMIN_PASSWORD || '',
-  KV: fileKV,
+  KV: kv,
 };
 
 const server = createServer(async (req, res) => {

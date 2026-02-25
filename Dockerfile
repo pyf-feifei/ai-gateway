@@ -2,13 +2,11 @@ FROM node:20-slim
 
 WORKDIR /app
 
-# Copy only the files needed to run
+COPY package.json package-lock.json* ./
+RUN npm install --omit=dev
+
 COPY server.js ./
 COPY src/ ./src/
-COPY package.json ./
-
-# Create persistent data directory
-RUN mkdir -p /data
 
 # HF Spaces requires port 7860
 ENV PORT=7860

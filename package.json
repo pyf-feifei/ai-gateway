@@ -8,6 +8,9 @@
     "deploy": "wrangler deploy",
     "start": "node server.js"
   },
+  "dependencies": {
+    "pg": "^8.13.1"
+  },
   "devDependencies": {
     "wrangler": "^4.23.0"
   }
