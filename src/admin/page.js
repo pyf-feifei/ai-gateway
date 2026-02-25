@@ -327,6 +327,11 @@ const I18N = {
     refreshUsage: 'Refresh',
     quota: 'Quota',
     noModelUsageYet: 'No requests yet',
+    boundChannels: 'Bound Channels',
+    allChannels: 'All Channels',
+    selectChannels: 'Select Channels',
+    channelBindHelp: 'Only route to selected channels. Empty = all channels.',
+    editKey: 'Edit Key',
   },
   zh: {
     loginSub: '请输入管理员密码或 API Key 继续',
@@ -420,6 +425,11 @@ const I18N = {
     refreshUsage: '刷新',
     quota: '配额',
     noModelUsageYet: '暂无请求记录',
+    boundChannels: '绑定渠道',
+    allChannels: '全部渠道',
+    selectChannels: '选择渠道',
+    channelBindHelp: '仅路由到选中的渠道。不选则使用全部渠道。',
+    editKey: '编辑密钥',
   },
 };
 
@@ -553,7 +563,7 @@ function renderChannelHeaders() {
 function renderApiKeyHeaders() {
   document.getElementById('ak-title').textContent = t('apiKeys');
   document.getElementById('ak-gen-btn').textContent = t('generateKey');
-  document.getElementById('ak-thead').innerHTML = '<th>'+[t('name'),t('key'),t('created'),t('status'),t('actions')].join('</th><th>')+'</th>';
+  document.getElementById('ak-thead').innerHTML = '<th>'+[t('name'),t('key'),t('boundChannels'),t('created'),t('status'),t('actions')].join('</th><th>')+'</th>';
 }
 
 // ============ Dashboard ============
@@ -706,23 +716,46 @@ async function toggleCh(id) {
 function renderApiKeys() {
   const tb = document.getElementById('ak-tbody');
   if (!apiKeys.length) {
-    tb.innerHTML = '<tr><td colspan="5" class="empty">' + t('noApiKeys') + '</td></tr>';
+    tb.innerHTML = '<tr><td colspan="6" class="empty">' + t('noApiKeys') + '</td></tr>';
     return;
   }
-  tb.innerHTML = apiKeys.map(k => \`
+  tb.innerHTML = apiKeys.map(k => {
+    const chIds = k.channel_ids || [];
+    const chNames = chIds.length > 0
+      ? chIds.map(id => { const ch = channels.find(c => c.id === id); return ch ? esc(ch.name) : '?'; }).join(', ')
+      : '<span style="color:var(--text-2)">' + t('allChannels') + '</span>';
+    return \`
     <tr>
       <td>\${esc(k.name)}</td>
       <td><span class="key-mono">\${maskKey(k.key)}</span>
         <button class="btn btn-sm btn-ghost" style="margin-left:8px" data-key="\${esc(k.key)}" onclick="copyKey(this)">\${t('copy')}</button>
       </td>
+      <td>\${chNames}</td>
       <td>\${fmtDate(k.created_at)}</td>
       <td><span class="badge \${k.enabled?'badge-on':'badge-off'}">\${k.enabled?t('on'):t('off')}</span></td>
-      <td>
+      <td style="white-space:nowrap">
+        <button class="btn btn-sm btn-ghost" onclick="showEditAkModal('\${k.id}')">\${t('edit')}</button>
         <button class="btn btn-sm btn-ghost" onclick="toggleAk('\${k.id}')">\${k.enabled?t('disable'):t('enable')}</button>
         <button class="btn btn-sm btn-danger" onclick="confirmDel('apikey','\${k.id}','\${esc(k.name)}')">\${t('delete')}</button>
       </td>
     </tr>
-  \`).join('');
+  \`}).join('');
+}
+
+function channelCheckboxes(selectedIds) {
+  if (!channels.length) return '<div class="form-help">' + t('noChannels') + '</div>';
+  return channels.map(ch => {
+    const checked = selectedIds.includes(ch.id) ? 'checked' : '';
+    return '<label style="display:flex;align-items:center;gap:8px;cursor:pointer;margin-bottom:6px;font-size:14px">' +
+      '<input type="checkbox" class="ch-bind-cb" value="' + ch.id + '" ' + checked + ' style="width:auto">' +
+      '<span>' + esc(ch.name) + '</span>' +
+      '<span style="color:var(--text-2);font-size:12px;margin-left:auto">' + esc(ch.base_url) + '</span>' +
+    '</label>';
+  }).join('');
+}
+
+function getSelectedChannelIds() {
+  return Array.from(document.querySelectorAll('.ch-bind-cb:checked')).map(cb => cb.value);
 }
 
 function showAkModal() {
@@ -732,6 +765,13 @@ function showAkModal() {
       <label>\${t('nameOptional')}</label>
       <input id="f-akname" placeholder="\${t('nameOptPlaceholder')}">
     </div>
+    <div class="form-group">
+      <label>\${t('selectChannels')}</label>
+      <div style="background:var(--bg-0);border:1px solid var(--border);border-radius:6px;padding:12px;max-height:200px;overflow-y:auto">
+        \${channelCheckboxes([])}
+      </div>
+      <div class="form-help">\${t('channelBindHelp')}</div>
+    </div>
     <div class="modal-actions">
       <button class="btn btn-ghost" onclick="closeModal()">\${t('cancel')}</button>
       <button class="btn btn-primary" onclick="genAk()">\${t('generate')}</button>
@@ -739,9 +779,33 @@ function showAkModal() {
   \`);
 }
 
+function showEditAkModal(id) {
+  const k = apiKeys.find(x => x.id === id);
+  if (!k) return;
+  openModal(\`
+    <h3>\${t('editKey')}</h3>
+    <div class="form-group">
+      <label>\${t('name')}</label>
+      <input id="f-akname-edit" value="\${esc(k.name)}">
+    </div>
+    <div class="form-group">
+      <label>\${t('selectChannels')}</label>
+      <div style="background:var(--bg-0);border:1px solid var(--border);border-radius:6px;padding:12px;max-height:200px;overflow-y:auto">
+        \${channelCheckboxes(k.channel_ids || [])}
+      </div>
+      <div class="form-help">\${t('channelBindHelp')}</div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" onclick="closeModal()">\${t('cancel')}</button>
+      <button class="btn btn-primary" onclick="saveEditAk('\${id}')">\${t('save')}</button>
+    </div>
+  \`);
+}
+
 async function genAk() {
   const name = document.getElementById('f-akname').value.trim() || 'Unnamed';
-  const r = await api('/apikeys', { method: 'POST', body: JSON.stringify({ name }) });
+  const channel_ids = getSelectedChannelIds();
+  const r = await api('/apikeys', { method: 'POST', body: JSON.stringify({ name, channel_ids }) });
   if (r && !r.error) {
     closeModal();
     openModal(\`
@@ -766,6 +830,20 @@ async function toggleAk(id) {
   if (!k) return;
   const r = await api('/apikeys/' + id, { method: 'PATCH', body: JSON.stringify({ enabled: !k.enabled }) });
   if (r && !r.error) { await loadData(); render(); }
+}
+
+async function saveEditAk(id) {
+  const name = document.getElementById('f-akname-edit').value.trim();
+  const channel_ids = getSelectedChannelIds();
+  const r = await api('/apikeys/' + id, { method: 'PATCH', body: JSON.stringify({ name, channel_ids }) });
+  if (r && !r.error) {
+    toast(t('channelUpdated'), 'success');
+    closeModal();
+    await loadData();
+    render();
+  } else {
+    toast(r?.error || t('failed'), 'error');
+  }
 }
 
 // ============ Usage Monitor ============

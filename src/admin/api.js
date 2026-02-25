@@ -127,6 +127,7 @@ export async function handleAdminApi(request, env, store) {
         id: crypto.randomUUID(),
         name: data.name?.trim() || 'Unnamed',
         key: generateApiKeyString(),
+        channel_ids: Array.isArray(data.channel_ids) ? data.channel_ids.filter(Boolean) : [],
         enabled: true,
         created_at: new Date().toISOString(),
       };
@@ -155,6 +156,7 @@ export async function handleAdminApi(request, env, store) {
         if (idx === -1) return jsonRes({ error: 'API key not found' }, 404);
         if (data.enabled !== undefined) keys[idx].enabled = data.enabled;
         if (data.name !== undefined) keys[idx].name = data.name.trim();
+        if (data.channel_ids !== undefined) keys[idx].channel_ids = Array.isArray(data.channel_ids) ? data.channel_ids.filter(Boolean) : [];
         await store.saveApiKeys(keys);
         return jsonRes(keys[idx]);
       }

@@ -14,9 +14,11 @@ export async function handleProxy(request, env, store) {
   const url = new URL(request.url);
   const path = url.pathname;
 
+  const allowedChannelIds = authResult.apiKey.channel_ids || null;
+
   // GET /v1/models
   if (path.endsWith('/models') && request.method === 'GET') {
-    return handleModels(store);
+    return handleModels(store, allowedChannelIds);
   }
 
   // Only POST for completions / embeddings / messages
@@ -33,16 +35,16 @@ export async function handleProxy(request, env, store) {
 
   // ---- Claude Messages API (/v1/messages) ----
   if (path.endsWith('/messages')) {
-    return handleClaudeMessages(request, url, body, store);
+    return handleClaudeMessages(request, url, body, store, allowedChannelIds);
   }
 
   // ---- OpenAI-compatible passthrough ----
-  return handleOpenAIProxy(request, url, path, body, store);
+  return handleOpenAIProxy(request, url, path, body, store, allowedChannelIds);
 }
 
 // ─── Claude Messages API handler ───────────────────────────────────
 
-async function handleClaudeMessages(request, url, claudeBody, store) {
+async function handleClaudeMessages(request, url, claudeBody, store, allowedChannelIds) {
   const model = claudeBody.model || '';
   const isStream = claudeBody.stream || false;
 
@@ -50,7 +52,7 @@ async function handleClaudeMessages(request, url, claudeBody, store) {
   const openaiBody = claudeToOpenAI(claudeBody);
 
   const lb = new LoadBalancer(store);
-  const { targets, error } = await lb.selectTarget(model);
+  const { targets, error } = await lb.selectTarget(model, allowedChannelIds);
 
   if (error || targets.length === 0) {
     // Return error in Claude format
@@ -75,6 +77,13 @@ async function handleClaudeMessages(request, url, claudeBody, store) {
         headers,
         body: JSON.stringify(openaiBody),
       });
+
+      // 404 means upstream doesn't have this model — try next target
+      if (resp.status === 404) {
+        lastError = `${target.channel.name}: HTTP 404 (model not found)`;
+        console.warn(`[proxy][claude] ${lastError}, trying next`);
+        continue;
+      }
 
       if (resp.ok || resp.status < 500) {
         if (!resp.ok) {
@@ -122,10 +131,10 @@ async function handleClaudeMessages(request, url, claudeBody, store) {
 
 // ─── OpenAI passthrough handler ────────────────────────────────────
 
-async function handleOpenAIProxy(request, url, path, body, store) {
+async function handleOpenAIProxy(request, url, path, body, store, allowedChannelIds) {
   const model = body.model || '';
   const lb = new LoadBalancer(store);
-  const { targets, error } = await lb.selectTarget(model);
+  const { targets, error } = await lb.selectTarget(model, allowedChannelIds);
 
   if (error || targets.length === 0) {
     return jsonRes({
@@ -158,6 +167,13 @@ async function handleOpenAIProxy(request, url, path, body, store) {
         headers,
         body: JSON.stringify(body),
       });
+
+      // 404 means upstream doesn't have this model — try next target
+      if (resp.status === 404) {
+        lastError = `${target.channel.name}: HTTP 404 (model not found)`;
+        console.warn(`[proxy] ${lastError}, trying next`);
+        continue;
+      }
 
       // Success or client-side error (4xx) — return immediately, don't retry
       if (resp.ok || resp.status < 500) {
@@ -199,9 +215,12 @@ async function handleOpenAIProxy(request, url, path, body, store) {
   }, 502);
 }
 
-async function handleModels(store) {
+async function handleModels(store, allowedChannelIds) {
   const channels = await store.getChannels();
-  const enabled = channels.filter(ch => ch.enabled);
+  let enabled = channels.filter(ch => ch.enabled);
+  if (allowedChannelIds && allowedChannelIds.length > 0) {
+    enabled = enabled.filter(ch => allowedChannelIds.includes(ch.id));
+  }
 
   // Collect models: use configured list if available, otherwise fetch from upstream
   const allModels = []; // { id, owned_by }

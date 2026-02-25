@@ -7,10 +7,16 @@ export class LoadBalancer {
    * Select ordered list of targets for a given model.
    * Targets are ordered by: priority group → weighted shuffle → round-robin keys.
    * The caller should try them in order (failover).
+   * @param {string} model
+   * @param {string[]|null} allowedChannelIds - if set, only these channels are used
    */
-  async selectTarget(model) {
+  async selectTarget(model, allowedChannelIds = null) {
     const channels = await this.store.getChannels();
-    const enabled = channels.filter(ch => ch.enabled && ch.keys?.length > 0);
+    let enabled = channels.filter(ch => ch.enabled && ch.keys?.length > 0);
+
+    if (allowedChannelIds && allowedChannelIds.length > 0) {
+      enabled = enabled.filter(ch => allowedChannelIds.includes(ch.id));
+    }
 
     // Filter channels that support this model
     const compatible = enabled.filter(ch => {
