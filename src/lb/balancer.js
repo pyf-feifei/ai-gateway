@@ -37,7 +37,7 @@ export class LoadBalancer {
       }));
     }
 
-    const compatible = enabled.filter(ch => {
+    let compatible = enabled.filter(ch => {
       if (ch.models && ch.models.length > 0) {
         return ch.models.some(m => m === model || model.startsWith(m));
       }
@@ -47,6 +47,31 @@ export class LoadBalancer {
       }
       return true; // no info available yet, accept as fallback
     });
+
+    // Stale model cache? Invalidate and re-discover from upstream, then retry.
+    if (compatible.length === 0 && needDiscovery.length > 0) {
+      for (const ch of needDiscovery) {
+        this.store.invalidateModelCache(ch.id);
+      }
+      discoveredModels.clear();
+      await Promise.all(needDiscovery.map(async ch => {
+        const fresh = await this._fetchUpstreamModels(ch);
+        if (fresh && fresh.length > 0) {
+          await this.store.setModelCache(ch.id, fresh).catch(() => {});
+          discoveredModels.set(ch.id, fresh);
+        }
+      }));
+      compatible = enabled.filter(ch => {
+        if (ch.models && ch.models.length > 0) {
+          return ch.models.some(m => m === model || model.startsWith(m));
+        }
+        const cached = discoveredModels.get(ch.id);
+        if (cached) {
+          return cached.some(m => m === model || model.startsWith(m));
+        }
+        return true;
+      });
+    }
 
     if (compatible.length === 0) {
       return { targets: [], error: 'No available channel for model: ' + model };

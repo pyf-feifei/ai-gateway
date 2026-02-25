@@ -1,4 +1,5 @@
 const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+const MODEL_CACHE_KV_TTL = 3600; // 1 hour – auto-expire in KV so stale model lists don't persist forever
 
 class KVStore {
   constructor(kv) {
@@ -111,7 +112,9 @@ class KVStore {
   }
 
   async setModelCache(channelId, modelIds) {
-    await this.set(`model-cache:${channelId}`, modelIds);
+    const key = `model-cache:${channelId}`;
+    await this.kv.put(key, JSON.stringify(modelIds), { expirationTtl: MODEL_CACHE_KV_TTL });
+    this.cache.set(key, { value: modelIds, time: Date.now() });
   }
 
   invalidateModelCache(channelId) {
