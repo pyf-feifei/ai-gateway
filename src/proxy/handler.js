@@ -111,14 +111,8 @@ async function handleClaudeMessages(request, url, claudeBody, store, allowedChan
           });
         }
 
-        // ---- Non-streaming: validate before converting ----
+        // ---- Non-streaming ----
         const openaiData = await resp.json();
-        if (!openaiData.choices || !Array.isArray(openaiData.choices) || openaiData.choices.length === 0) {
-          lastError = `${target.channel.name}: upstream returned empty choices`;
-          console.warn(`[proxy][claude] ${lastError}, trying next`);
-          continue;
-        }
-
         const claudeResponse = openAIToClaude(openaiData, model);
         return jsonRes(claudeResponse, 200);
       }
@@ -183,11 +177,6 @@ async function handleOpenAIProxy(request, url, path, body, store, allowedChannel
 
       // Success or client-side error (4xx) — return immediately, don't retry
       if (resp.ok || resp.status < 500) {
-        if (!resp.ok) {
-          const errBody = await resp.text();
-          return jsonRes({ error: { message: `Upstream error: ${errBody}`, type: 'upstream_error' } }, resp.status);
-        }
-
         if (resp.ok && target.channel.quota_enabled) {
           store.incrementUsage(target.channel.id, target.key, model).catch(e =>
             console.error('[usage] increment failed:', e)
@@ -201,21 +190,12 @@ async function handleOpenAIProxy(request, url, path, body, store, allowedChannel
 
         if (body.stream) {
           respHeaders.set('Cache-Control', 'no-cache');
-          return new Response(resp.body, { status: resp.status, headers: respHeaders });
         }
 
-        // Non-streaming: validate response before forwarding
-        const respText = await resp.text();
-        try {
-          const data = JSON.parse(respText);
-          if (upstreamPath.includes('/chat/completions') && (!data.choices || !Array.isArray(data.choices) || data.choices.length === 0)) {
-            lastError = `${target.channel.name}: upstream returned empty choices`;
-            console.warn(`[proxy] ${lastError}, trying next`);
-            continue;
-          }
-        } catch { /* not JSON, pass through as-is */ }
-
-        return new Response(respText, { status: resp.status, headers: respHeaders });
+        return new Response(resp.body, {
+          status: resp.status,
+          headers: respHeaders,
+        });
       }
 
       // 5xx — try next target
