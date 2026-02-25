@@ -16,12 +16,15 @@ import worker from './src/index.js';
 import { FileKV } from './src/store/file-kv.js';
 
 const PORT = parseInt(process.env.PORT || '7860');
-const DATABASE_URL = process.env.DATABASE_URL;
 
 let kv;
-if (DATABASE_URL) {
+if (process.env.SUPABASE_URL && process.env.SUPABASE_KEY) {
+  const { SupabaseKV } = await import('./src/store/supabase-kv.js');
+  kv = new SupabaseKV(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
+  console.log('Using Supabase REST API for persistent data storage');
+} else if (process.env.DATABASE_URL) {
   const { PgKV } = await import('./src/store/pg-kv.js');
-  kv = new PgKV(DATABASE_URL);
+  kv = new PgKV(process.env.DATABASE_URL);
   console.log('Using PostgreSQL for persistent data storage');
 } else {
   kv = new FileKV();
