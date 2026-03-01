@@ -114,6 +114,8 @@ async function handleClaudeMessages(request, url, claudeBody, store, allowedChan
               'Content-Type': 'text/event-stream',
               'Cache-Control': 'no-cache',
               'Connection': 'keep-alive',
+              // 禁用 nginx 缓冲，确保 HF Spaces 代理实时转发流式数据
+              'X-Accel-Buffering': 'no',
               'Access-Control-Allow-Origin': '*',
             },
           });
@@ -211,8 +213,13 @@ async function handleOpenAIProxy(request, url, path, body, store, allowedChannel
         respHeaders.set('Access-Control-Allow-Origin', '*');
 
         if (body.stream) {
+          // 禁用 nginx 缓冲（HF Spaces 必须），否则代理会缓冲整个流导致 ECONNRESET
+          respHeaders.set('Content-Type', 'text/event-stream');
           respHeaders.set('Cache-Control', 'no-cache');
-          return new Response(resp.body, { status: resp.status, headers: respHeaders });
+          respHeaders.set('Connection', 'keep-alive');
+          respHeaders.set('X-Accel-Buffering', 'no');
+          // 修复上游 id 字段非字符串问题（@ai-sdk/openai-compatible 要求 id 必须为字符串）
+          return new Response(fixStreamIds(resp.body), { status: resp.status, headers: respHeaders });
         }
 
         // Non-streaming: validate chat/completions responses
@@ -341,4 +348,42 @@ function claudeErrorRes(message, status = 500) {
       'Access-Control-Allow-Origin': '*',
     },
   });
+}
+
+/**
+ * 修复 OpenAI SSE 流中 id 字段非字符串问题。
+ * 部分上游 API（如 z-ai/glm4.7）返回 id: null，
+ * 导致 @ai-sdk/openai-compatible 抛出 AI_InvalidResponseDataError。
+ */
+function fixStreamIds(body) {
+  const dec = new TextDecoder();
+  const enc = new TextEncoder();
+  let buf = '';
+
+  return body.pipeThrough(new TransformStream({
+    transform(chunk, ctrl) {
+      buf += dec.decode(chunk, { stream: true });
+      // SSE 事件以 \n\n 分隔
+      const parts = buf.split('\n\n');
+      buf = parts.pop() ?? '';
+
+      for (const part of parts) {
+        const trimmed = part.trim();
+        if (trimmed.startsWith('data: ') && trimmed !== 'data: [DONE]') {
+          try {
+            const data = JSON.parse(trimmed.slice(6));
+            if (typeof data.id !== 'string') {
+              data.id = data.id != null ? String(data.id) : ('chatcmpl-' + Date.now());
+            }
+            ctrl.enqueue(enc.encode('data: ' + JSON.stringify(data) + '\n\n'));
+            continue;
+          } catch { /* JSON 解析失败，原样透传 */ }
+        }
+        ctrl.enqueue(enc.encode(part + '\n\n'));
+      }
+    },
+    flush(ctrl) {
+      if (buf.trim()) ctrl.enqueue(enc.encode(buf));
+    },
+  }));
 }
