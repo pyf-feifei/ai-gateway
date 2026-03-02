@@ -106,7 +106,11 @@ async function handleClaudeMessages(request, url, claudeBody, store, allowedChan
           return claudeErrorRes(`Upstream error: ${errBody}`, resp.status);
         }
 
-        if (isStream) {
+        // 上游可能忽略 stream:true 返回普通 JSON（常见于国内 API 异常响应），
+        // 通过 Content-Type 判断是否真的是 SSE 流
+        const isRealStream = isStream && (resp.headers.get('Content-Type') || '').includes('text/event-stream');
+
+        if (isRealStream) {
           // 渠道用量立即记录（仅计数）
           store.incrementUsage(target.channel.id, target.key, model).catch(e =>
             console.error('[usage] increment failed:', e));
@@ -238,7 +242,9 @@ async function handleOpenAIProxy(request, url, path, body, store, allowedChannel
         if (ct) respHeaders.set('Content-Type', ct);
         respHeaders.set('Access-Control-Allow-Origin', '*');
 
-        if (body.stream) {
+        // 上游可能忽略 stream:true 返回普通 JSON（常见于国内 API 异常响应），
+        // 通过 Content-Type 判断是否真的是 SSE 流，不是则回退到非流式验证
+        if (body.stream && (ct || '').includes('text/event-stream')) {
           // 禁用 nginx 缓冲（HF Spaces 必须），否则代理会缓冲整个流导致 ECONNRESET
           respHeaders.set('Content-Type', 'text/event-stream');
           respHeaders.set('Cache-Control', 'no-cache');
