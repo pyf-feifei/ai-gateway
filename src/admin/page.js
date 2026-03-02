@@ -1041,13 +1041,13 @@ function renderUsage() {
       let pageButtons = '';
       for (let p = pageStart; p <= pageEnd; p++) {
         const activeClass = p === curPage ? ' pg-active' : '';
-        pageButtons += '<button class="' + activeClass + '" onclick="window._usagePage(\'' + cid + '\',' + p + ')">' + p + '</button>';
+        pageButtons += '<button class="' + activeClass + '" onclick="window._usagePage(\\\'' + cid + '\\\',' + p + ')">' + p + '</button>';
       }
 
       paginationHtml = '<div class="pagination">' +
-        '<button' + prevDisabled + ' onclick="window._usagePage(\'' + cid + '\',' + (curPage - 1) + ')">&laquo;</button>' +
+        '<button' + prevDisabled + ' onclick="window._usagePage(\\\'' + cid + '\\\',' + (curPage - 1) + ')">&laquo;</button>' +
         pageButtons +
-        '<button' + nextDisabled + ' onclick="window._usagePage(\'' + cid + '\',' + (curPage + 1) + ')">&raquo;</button>' +
+        '<button' + nextDisabled + ' onclick="window._usagePage(\\\'' + cid + '\\\',' + (curPage + 1) + ')">&raquo;</button>' +
         '<span class="pg-info">' + totalKeys + ' ' + t('keysTotal') + '</span>' +
       '</div>';
     }
