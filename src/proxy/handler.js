@@ -106,7 +106,12 @@ async function handleClaudeMessages(request, url, claudeBody, store, allowedChan
           return claudeErrorRes(`Upstream error: ${errBody}`, resp.status);
         }
 
-        if (isStream) {
+        // 上游返回 SSE 流时才走流式处理；某些上游在异常情况下即使收到
+        // stream:true 也会返回普通 JSON（choices:null），此时走非流式验证路径
+        const upstreamIsSSE = isStream &&
+          (resp.headers.get('Content-Type') || '').includes('text/event-stream');
+
+        if (upstreamIsSSE) {
           // 渠道用量立即记录（仅计数）
           store.incrementUsage(target.channel.id, target.key, model).catch(e =>
             console.error('[usage] increment failed:', e));
@@ -138,6 +143,10 @@ async function handleClaudeMessages(request, url, claudeBody, store, allowedChan
           });
         }
 
+        // 非流式 或 上游未返回 SSE 时（可能是异常 JSON），验证 choices 字段
+        if (isStream) {
+          console.warn(`[proxy][claude] 上游对 stream:true 返回了非 SSE 响应 (Content-Type: ${resp.headers.get('Content-Type')}), 回退到非流式验证`);
+        }
         const openaiData = await resp.json();
         if (!Array.isArray(openaiData.choices)) {
           lastError = `upstream returned invalid response (choices=${openaiData.choices})`;
@@ -238,7 +247,12 @@ async function handleOpenAIProxy(request, url, path, body, store, allowedChannel
         if (ct) respHeaders.set('Content-Type', ct);
         respHeaders.set('Access-Control-Allow-Origin', '*');
 
-        if (body.stream) {
+        // 上游返回 SSE 流时才走流式处理；某些上游在异常情况下即使收到
+        // stream:true 也会返回普通 JSON（choices:null），此时走非流式验证路径
+        const upstreamIsSSE = body.stream &&
+          (ct || '').includes('text/event-stream');
+
+        if (upstreamIsSSE) {
           // 禁用 nginx 缓冲（HF Spaces 必须），否则代理会缓冲整个流导致 ECONNRESET
           respHeaders.set('Content-Type', 'text/event-stream');
           respHeaders.set('Cache-Control', 'no-cache');
@@ -264,6 +278,11 @@ async function handleOpenAIProxy(request, url, path, body, store, allowedChannel
           }
 
           return new Response(stream, { status: resp.status, headers: respHeaders });
+        }
+
+        // 上游对 stream:true 返回了非 SSE 响应，回退到非流式验证
+        if (body.stream) {
+          console.warn(`[proxy] 上游对 stream:true 返回了非 SSE 响应 (Content-Type: ${ct}), 回退到非流式验证`);
         }
 
         // Non-streaming: validate chat/completions responses
