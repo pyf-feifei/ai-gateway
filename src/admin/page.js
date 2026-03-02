@@ -127,6 +127,14 @@ label{display:block;margin-bottom:6px;font-size:13px;color:var(--text-1);font-we
 .progress-danger{background:linear-gradient(90deg,#ef4444,#f87171)}
 .date-picker{display:flex;gap:8px;align-items:center;margin-bottom:20px}
 .date-picker input[type="date"]{width:180px}
+
+/* 分页控件 */
+.pagination{display:flex;align-items:center;justify-content:center;gap:4px;margin-top:14px;padding-top:14px;border-top:1px solid var(--border)}
+.pagination button{min-width:32px;height:28px;border:1px solid var(--border);border-radius:4px;background:var(--bg-1);color:var(--text-1);font-size:12px;cursor:pointer;transition:all .15s;padding:0 8px}
+.pagination button:hover:not(:disabled):not(.pg-active){background:var(--bg-3);border-color:var(--primary)}
+.pagination button:disabled{opacity:.35;cursor:default}
+.pagination .pg-active{background:var(--primary);color:#fff;border-color:var(--primary);font-weight:600}
+.pagination .pg-info{font-size:12px;color:var(--text-2);margin:0 4px}
 </style>
 </head>
 <body>
@@ -353,6 +361,7 @@ const I18N = {
     errorMessage: 'Message',
     errorKey: 'Key',
     errorsToday: 'errors today',
+    keysTotal: 'keys',
   },
   zh: {
     loginSub: '请输入管理员密码或 API Key 继续',
@@ -468,6 +477,7 @@ const I18N = {
     errorMessage: '错误信息',
     errorKey: '密钥',
     errorsToday: '个错误',
+    keysTotal: '个密钥',
   },
 };
 
@@ -913,6 +923,8 @@ async function saveEditAk(id) {
 
 // ============ Usage Monitor ============
 let usageData = null;
+const USAGE_PAGE_SIZE = 10;
+const usageKeyPages = {};  // { channelId: currentPage(从1开始) }
 
 function renderUsageHeaders() {
   document.getElementById('usage-title').textContent = t('usageMonitor');
@@ -963,7 +975,16 @@ function renderUsage() {
         ' · ' + t('dailyPerModelLimit') + ': ' + (ch.quota_daily_per_model || '∞') + '</span>'
       : '';
 
-    const keyCards = (ch.keys || []).map(k => {
+    const allKeys = ch.keys || [];
+    const totalKeys = allKeys.length;
+    const totalPages = Math.max(1, Math.ceil(totalKeys / USAGE_PAGE_SIZE));
+    const curPage = Math.min(usageKeyPages[ch.channel_id] || 1, totalPages);
+    usageKeyPages[ch.channel_id] = curPage;
+
+    const startIdx = (curPage - 1) * USAGE_PAGE_SIZE;
+    const pageKeys = allKeys.slice(startIdx, startIdx + USAGE_PAGE_SIZE);
+
+    const keyCards = pageKeys.map(k => {
       const u = k.usage;
       const hasQuota = ch.quota_enabled;
 
@@ -1005,13 +1026,46 @@ function renderUsage() {
       '</div>';
     }).join('');
 
+    // 分页控件（仅在超过一页时显示）
+    let paginationHtml = '';
+    if (totalPages > 1) {
+      const cid = ch.channel_id;
+      const prevDisabled = curPage <= 1 ? ' disabled' : '';
+      const nextDisabled = curPage >= totalPages ? ' disabled' : '';
+
+      // 页码按钮（最多显示5个，当前页居中）
+      let pageStart = Math.max(1, curPage - 2);
+      let pageEnd = Math.min(totalPages, pageStart + 4);
+      if (pageEnd - pageStart < 4) pageStart = Math.max(1, pageEnd - 4);
+
+      let pageButtons = '';
+      for (let p = pageStart; p <= pageEnd; p++) {
+        const activeClass = p === curPage ? ' pg-active' : '';
+        pageButtons += '<button class="' + activeClass + '" onclick="window._usagePage(\'' + cid + '\',' + p + ')">' + p + '</button>';
+      }
+
+      paginationHtml = '<div class="pagination">' +
+        '<button' + prevDisabled + ' onclick="window._usagePage(\'' + cid + '\',' + (curPage - 1) + ')">&laquo;</button>' +
+        pageButtons +
+        '<button' + nextDisabled + ' onclick="window._usagePage(\'' + cid + '\',' + (curPage + 1) + ')">&raquo;</button>' +
+        '<span class="pg-info">' + totalKeys + ' ' + t('keysTotal') + '</span>' +
+      '</div>';
+    }
+
     return '<div class="usage-card">' +
       '<h4>' + statusDot + ' ' + esc(ch.channel_name) + quotaBadge + '</h4>' +
       (limitInfo ? '<div style="margin-bottom:14px">' + limitInfo + '</div>' : '') +
       keyCards +
+      paginationHtml +
     '</div>';
   }).join('');
 }
+
+// 分页跳转
+window._usagePage = function(channelId, page) {
+  usageKeyPages[channelId] = page;
+  renderUsage();
+};
 
 function renderErrors(errData) {
   const container = document.getElementById('error-container');
