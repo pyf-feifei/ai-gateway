@@ -446,6 +446,11 @@ function processStream(body) {
         if (trimmed.startsWith('data: ') && trimmed !== 'data: [DONE]') {
           try {
             const data = JSON.parse(trimmed.slice(6));
+            // 过滤掉 choices 为 null 的无效 chunk（国内 API 常见异常）
+            if ('choices' in data && !Array.isArray(data.choices)) {
+              if (data.usage) capturedUsage = data.usage;
+              continue;
+            }
             if (typeof data.id !== 'string') {
               data.id = data.id != null ? String(data.id) : ('chatcmpl-' + Date.now());
             }
