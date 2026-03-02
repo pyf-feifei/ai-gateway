@@ -88,6 +88,42 @@ class KVStore {
     return allUsage[kid];
   }
 
+  // ── Per-client API key usage tracking ──
+  // Storage: apikey-usage:{date} → { "keyId": { requests, prompt_tokens, completion_tokens, models: { m: { requests, prompt_tokens, completion_tokens } } } }
+
+  async getApiKeyUsage(date) {
+    const key = `apikey-usage:${date || this._todayKey()}`;
+    try {
+      return (await this.kv.get(key, 'json')) || {};
+    } catch {
+      return {};
+    }
+  }
+
+  async incrementApiKeyUsage(apiKeyId, model, promptTokens = 0, completionTokens = 0) {
+    const date = this._todayKey();
+    const kvKey = `apikey-usage:${date}`;
+    const allUsage = await this.getApiKeyUsage(date);
+
+    if (!allUsage[apiKeyId]) {
+      allUsage[apiKeyId] = { requests: 0, prompt_tokens: 0, completion_tokens: 0, models: {} };
+    }
+    const u = allUsage[apiKeyId];
+    u.requests += 1;
+    u.prompt_tokens += promptTokens;
+    u.completion_tokens += completionTokens;
+
+    if (model) {
+      if (!u.models[model]) u.models[model] = { requests: 0, prompt_tokens: 0, completion_tokens: 0 };
+      u.models[model].requests += 1;
+      u.models[model].prompt_tokens += promptTokens;
+      u.models[model].completion_tokens += completionTokens;
+    }
+
+    await this.kv.put(kvKey, JSON.stringify(allUsage));
+    return u;
+  }
+
   // ── Error logs (per-channel, per-day, last 100 entries) ──
 
   async appendError(channelId, entry) {

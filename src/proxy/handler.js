@@ -15,6 +15,7 @@ export async function handleProxy(request, env, store) {
   const path = url.pathname;
 
   const allowedChannelIds = authResult.apiKey.channel_ids || null;
+  const clientKeyId = authResult.apiKey.id;
 
   // GET /v1/models
   if (path.endsWith('/models') && request.method === 'GET') {
@@ -35,21 +36,26 @@ export async function handleProxy(request, env, store) {
 
   // ---- Claude Messages API (/v1/messages) ----
   if (path.endsWith('/messages')) {
-    return handleClaudeMessages(request, url, body, store, allowedChannelIds);
+    return handleClaudeMessages(request, url, body, store, allowedChannelIds, clientKeyId);
   }
 
   // ---- OpenAI-compatible passthrough ----
-  return handleOpenAIProxy(request, url, path, body, store, allowedChannelIds);
+  return handleOpenAIProxy(request, url, path, body, store, allowedChannelIds, clientKeyId);
 }
 
 // ─── Claude Messages API handler ───────────────────────────────────
 
-async function handleClaudeMessages(request, url, claudeBody, store, allowedChannelIds) {
+async function handleClaudeMessages(request, url, claudeBody, store, allowedChannelIds, clientKeyId) {
   const model = claudeBody.model || '';
   const isStream = claudeBody.stream || false;
 
   // Convert Claude request to OpenAI format
   const openaiBody = claudeToOpenAI(claudeBody);
+
+  // 参考 one-api：流式请求注入 stream_options，让上游返回 token 用量
+  if (isStream) {
+    openaiBody.stream_options = { include_usage: true };
+  }
 
   const lb = new LoadBalancer(store);
   const { targets, error } = await lb.selectTarget(model, allowedChannelIds);
@@ -100,14 +106,25 @@ async function handleClaudeMessages(request, url, claudeBody, store, allowedChan
           return claudeErrorRes(`Upstream error: ${errBody}`, resp.status);
         }
 
-        if (target.channel.quota_enabled) {
-          store.incrementUsage(target.channel.id, target.key, model).catch(e =>
-            console.error('[usage] increment failed:', e)
-          );
-        }
-
         if (isStream) {
-          const claudeStream = openAIStreamToClaudeStream(resp.body, model);
+          // 渠道用量立即记录（仅计数）
+          store.incrementUsage(target.channel.id, target.key, model).catch(e =>
+            console.error('[usage] increment failed:', e));
+
+          // 参考 one-api：先通过 processStream 捕获流式 usage，再转换为 Claude 格式
+          const { stream: processedStream, usagePromise } = processStream(resp.body);
+          const claudeStream = openAIStreamToClaudeStream(processedStream, model);
+
+          // 流结束后异步记录 API 密钥用量（含 token 数）
+          usagePromise.then(usage => {
+            const pt = usage?.prompt_tokens || 0;
+            const ct = usage?.completion_tokens || 0;
+            store.incrementApiKeyUsage(clientKeyId, model, pt, ct).catch(e =>
+              console.error('[apikey-usage] increment failed:', e));
+          }).catch(() => {
+            store.incrementApiKeyUsage(clientKeyId, model, 0, 0).catch(() => {});
+          });
+
           return new Response(claudeStream, {
             status: 200,
             headers: {
@@ -127,6 +144,15 @@ async function handleClaudeMessages(request, url, claudeBody, store, allowedChan
           logError(store, target, model, 200, lastError);
           continue;
         }
+
+        // 非流式：从响应中提取 token 用量
+        const pt = openaiData.usage?.prompt_tokens || 0;
+        const ct = openaiData.usage?.completion_tokens || 0;
+        store.incrementUsage(target.channel.id, target.key, model).catch(e =>
+          console.error('[usage] increment failed:', e));
+        store.incrementApiKeyUsage(clientKeyId, model, pt, ct).catch(e =>
+          console.error('[apikey-usage] increment failed:', e));
+
         const claudeResponse = openAIToClaude(openaiData, model);
         return jsonRes(claudeResponse, 200);
       }
@@ -144,7 +170,7 @@ async function handleClaudeMessages(request, url, claudeBody, store, allowedChan
 
 // ─── OpenAI passthrough handler ────────────────────────────────────
 
-async function handleOpenAIProxy(request, url, path, body, store, allowedChannelIds) {
+async function handleOpenAIProxy(request, url, path, body, store, allowedChannelIds, clientKeyId) {
   const model = body.model || '';
   const lb = new LoadBalancer(store);
   const { targets, error } = await lb.selectTarget(model, allowedChannelIds);
@@ -157,6 +183,12 @@ async function handleOpenAIProxy(request, url, path, body, store, allowedChannel
 
   // Strip /v1 prefix, keep the rest (e.g. /chat/completions)
   const upstreamPath = path.replace(/^\/v1/, '');
+
+  // 参考 one-api：流式请求注入 stream_options，让上游在最后一个 chunk 返回 token 用量
+  if (body.stream) {
+    if (!body.stream_options) body.stream_options = {};
+    body.stream_options.include_usage = true;
+  }
 
   // Try each target in order (failover on 5xx / network error)
   let lastError = null;
@@ -201,12 +233,6 @@ async function handleOpenAIProxy(request, url, path, body, store, allowedChannel
           logError(store, target, model, resp.status, `HTTP ${resp.status}`);
         }
 
-        if (resp.ok && target.channel.quota_enabled) {
-          store.incrementUsage(target.channel.id, target.key, model).catch(e =>
-            console.error('[usage] increment failed:', e)
-          );
-        }
-
         const respHeaders = new Headers();
         const ct = resp.headers.get('Content-Type');
         if (ct) respHeaders.set('Content-Type', ct);
@@ -218,13 +244,32 @@ async function handleOpenAIProxy(request, url, path, body, store, allowedChannel
           respHeaders.set('Cache-Control', 'no-cache');
           respHeaders.set('Connection', 'keep-alive');
           respHeaders.set('X-Accel-Buffering', 'no');
-          // 修复上游 id 字段非字符串问题（@ai-sdk/openai-compatible 要求 id 必须为字符串）
-          return new Response(fixStreamIds(resp.body), { status: resp.status, headers: respHeaders });
+
+          // 处理流：修复 id 字段 + 捕获 usage（参考 one-api 流式 token 统计方案）
+          const { stream, usagePromise } = processStream(resp.body);
+
+          if (resp.ok) {
+            // 渠道用量立即记录（仅计数）
+            store.incrementUsage(target.channel.id, target.key, model).catch(e =>
+              console.error('[usage] increment failed:', e));
+            // API 密钥用量在流结束后记录（含 token 数）
+            usagePromise.then(usage => {
+              const pt = usage?.prompt_tokens || 0;
+              const ct = usage?.completion_tokens || 0;
+              store.incrementApiKeyUsage(clientKeyId, model, pt, ct).catch(e =>
+                console.error('[apikey-usage] increment failed:', e));
+            }).catch(() => {
+              store.incrementApiKeyUsage(clientKeyId, model, 0, 0).catch(() => {});
+            });
+          }
+
+          return new Response(stream, { status: resp.status, headers: respHeaders });
         }
 
         // Non-streaming: validate chat/completions responses
         if (resp.ok && upstreamPath.includes('/chat/completions')) {
           const respText = await resp.text();
+          let promptTokens = 0, completionTokens = 0;
           try {
             const data = JSON.parse(respText);
             if (!Array.isArray(data.choices)) {
@@ -232,8 +277,23 @@ async function handleOpenAIProxy(request, url, path, body, store, allowedChannel
               logError(store, target, model, 200, lastError);
               continue;
             }
+            promptTokens = data.usage?.prompt_tokens || 0;
+            completionTokens = data.usage?.completion_tokens || 0;
           } catch { /* not valid JSON — pass through as-is */ }
+          // 非流式：记录请求次数和 token 用量
+          store.incrementUsage(target.channel.id, target.key, model).catch(e =>
+            console.error('[usage] increment failed:', e));
+          store.incrementApiKeyUsage(clientKeyId, model, promptTokens, completionTokens).catch(e =>
+            console.error('[apikey-usage] increment failed:', e));
           return new Response(respText, { status: resp.status, headers: respHeaders });
+        }
+
+        // 其他非流式路径（embeddings 等）
+        if (resp.ok) {
+          store.incrementUsage(target.channel.id, target.key, model).catch(e =>
+            console.error('[usage] increment failed:', e));
+          store.incrementApiKeyUsage(clientKeyId, model, 0, 0).catch(e =>
+            console.error('[apikey-usage] increment failed:', e));
         }
 
         return new Response(resp.body, { status: resp.status, headers: respHeaders });
@@ -351,19 +411,27 @@ function claudeErrorRes(message, status = 500) {
 }
 
 /**
- * 修复 OpenAI SSE 流中 id 字段非字符串问题。
- * 部分上游 API（如 z-ai/glm4.7）返回 id: null，
- * 导致 @ai-sdk/openai-compatible 抛出 AI_InvalidResponseDataError。
+ * 处理 SSE 流：修复 id 字段 + 捕获 usage（参考 one-api 流式 token 统计方案）。
+ *
+ * 功能：
+ * 1. 修复上游返回 id: null 的问题（国内模型如 GLM 不遵循 OpenAI 规范）
+ * 2. 配合 stream_options.include_usage=true，从最后一个 chunk 捕获 token 用量
+ *
+ * 返回 { stream, usagePromise }：
+ * - stream: 修复后的 ReadableStream，可直接返回给客户端
+ * - usagePromise: 流结束后 resolve 为 { prompt_tokens, completion_tokens } 或 null
  */
-function fixStreamIds(body) {
+function processStream(body) {
   const dec = new TextDecoder();
   const enc = new TextEncoder();
   let buf = '';
+  let capturedUsage = null;
+  let resolveUsage;
+  const usagePromise = new Promise(resolve => { resolveUsage = resolve; });
 
-  return body.pipeThrough(new TransformStream({
+  const stream = body.pipeThrough(new TransformStream({
     transform(chunk, ctrl) {
       buf += dec.decode(chunk, { stream: true });
-      // SSE 事件以 \n\n 分隔
       const parts = buf.split('\n\n');
       buf = parts.pop() ?? '';
 
@@ -375,6 +443,10 @@ function fixStreamIds(body) {
             if (typeof data.id !== 'string') {
               data.id = data.id != null ? String(data.id) : ('chatcmpl-' + Date.now());
             }
+            // 捕获 usage（stream_options.include_usage=true 时上游在末尾 chunk 返回）
+            if (data.usage) {
+              capturedUsage = data.usage;
+            }
             ctrl.enqueue(enc.encode('data: ' + JSON.stringify(data) + '\n\n'));
             continue;
           } catch { /* JSON 解析失败，原样透传 */ }
@@ -384,6 +456,9 @@ function fixStreamIds(body) {
     },
     flush(ctrl) {
       if (buf.trim()) ctrl.enqueue(enc.encode(buf));
+      resolveUsage(capturedUsage);
     },
   }));
+
+  return { stream, usagePromise };
 }

@@ -323,14 +323,23 @@ const I18N = {
     quotaModelHelp: 'Max requests per model per day. 0 = unlimited.',
     totalUsage: 'Daily Total',
     perModelUsage: 'Per Model',
-    noQuotaChannels: 'No channels with quota enabled. Enable quota in channel settings.',
+    noQuotaChannels: 'No usage data for the selected date.',
     quotaExceeded: 'Exceeded',
     remaining: 'remaining',
     unlimited: 'Unlimited',
     usageDate: 'Date',
     refreshUsage: 'Refresh',
     quota: 'Quota',
+    quotaEnabled: 'Quota',
+    noQuota: 'No Quota',
     noModelUsageYet: 'No requests yet',
+    requests: 'Requests',
+    tokens: 'Tokens',
+    estimatedCost: 'Cost',
+    promptTokens: 'Input',
+    completionTokens: 'Output',
+    usage: 'Usage',
+    noUsageYet: 'No usage yet',
     boundChannels: 'Bound Channels',
     allChannels: 'All Channels',
     selectChannels: 'Select Channels',
@@ -429,14 +438,23 @@ const I18N = {
     quotaModelHelp: '每个模型每日请求上限，0 = 不限制。',
     totalUsage: '每日总量',
     perModelUsage: '单模型用量',
-    noQuotaChannels: '暂无启用配额的渠道，请在渠道设置中启用配额。',
+    noQuotaChannels: '所选日期暂无用量数据。',
     quotaExceeded: '已超限',
     remaining: '剩余',
     unlimited: '不限制',
     usageDate: '日期',
     refreshUsage: '刷新',
     quota: '配额',
+    quotaEnabled: '配额',
+    noQuota: '无配额',
     noModelUsageYet: '暂无请求记录',
+    requests: '请求',
+    tokens: 'Tokens',
+    estimatedCost: '费用',
+    promptTokens: '输入',
+    completionTokens: '输出',
+    usage: '用量',
+    noUsageYet: '暂无用量',
     boundChannels: '绑定渠道',
     allChannels: '全部渠道',
     selectChannels: '选择渠道',
@@ -483,10 +501,17 @@ async function api(path, opts = {}) {
   }
 }
 
+let apiKeyUsage = {};
+
 async function loadData() {
-  const [ch, ak] = await Promise.all([api('/channels'), api('/apikeys')]);
+  const [ch, ak, aku] = await Promise.all([
+    api('/channels'),
+    api('/apikeys'),
+    api('/apikeys/usage'),
+  ]);
   channels = ch || [];
   apiKeys = ak || [];
+  apiKeyUsage = (aku && aku.keys) || {};
 }
 
 // ============ Auth ============
@@ -583,7 +608,7 @@ function renderChannelHeaders() {
 function renderApiKeyHeaders() {
   document.getElementById('ak-title').textContent = t('apiKeys');
   document.getElementById('ak-gen-btn').textContent = t('generateKey');
-  document.getElementById('ak-thead').innerHTML = '<th>'+[t('name'),t('key'),t('boundChannels'),t('created'),t('status'),t('actions')].join('</th><th>')+'</th>';
+  document.getElementById('ak-thead').innerHTML = '<th>'+[t('name'),t('key'),t('boundChannels'),t('usage'),t('created'),t('status'),t('actions')].join('</th><th>')+'</th>';
 }
 
 // ============ Dashboard ============
@@ -736,7 +761,7 @@ async function toggleCh(id) {
 function renderApiKeys() {
   const tb = document.getElementById('ak-tbody');
   if (!apiKeys.length) {
-    tb.innerHTML = '<tr><td colspan="6" class="empty">' + t('noApiKeys') + '</td></tr>';
+    tb.innerHTML = '<tr><td colspan="7" class="empty">' + t('noApiKeys') + '</td></tr>';
     return;
   }
   tb.innerHTML = apiKeys.map(k => {
@@ -744,6 +769,25 @@ function renderApiKeys() {
     const chNames = chIds.length > 0
       ? chIds.map(id => { const ch = channels.find(c => c.id === id); return ch ? esc(ch.name) : '?'; }).join(', ')
       : '<span style="color:var(--text-2)">' + t('allChannels') + '</span>';
+
+    // API 密钥用量统计
+    const u = apiKeyUsage[k.id];
+    let usageHtml;
+    if (u && u.requests > 0) {
+      const totalTokens = (u.prompt_tokens || 0) + (u.completion_tokens || 0);
+      const cost = calcKeyTotalCost(u);
+      usageHtml = '<div style="font-size:12px;line-height:1.6">' +
+        '<span style="color:var(--text-0)">' + fmtNum(u.requests) + '</span> <span style="color:var(--text-2)">' + t('requests') + '</span>' +
+        ' <span style="color:var(--border);margin:0 4px">·</span> ' +
+        '<span style="color:var(--text-0)">' + fmtNum(totalTokens) + '</span> <span style="color:var(--text-2)">' + t('tokens') + '</span>' +
+        (totalTokens > 0 ? ' <span style="font-size:11px;color:var(--text-2)">(' + fmtNum(u.prompt_tokens||0) + '↑ ' + fmtNum(u.completion_tokens||0) + '↓)</span>' : '') +
+        ' <span style="color:var(--border);margin:0 4px">·</span> ' +
+        '<span style="color:var(--success);font-weight:500">' + fmtCost(cost) + '</span>' +
+      '</div>';
+    } else {
+      usageHtml = '<span style="font-size:12px;color:var(--text-2)">' + t('noUsageYet') + '</span>';
+    }
+
     return \`
     <tr>
       <td>\${esc(k.name)}</td>
@@ -751,6 +795,7 @@ function renderApiKeys() {
         <button class="btn btn-sm btn-ghost" style="margin-left:8px" data-key="\${esc(k.key)}" onclick="copyKey(this)">\${t('copy')}</button>
       </td>
       <td>\${chNames}</td>
+      <td>\${usageHtml}</td>
       <td>\${fmtDate(k.created_at)}</td>
       <td><span class="badge \${k.enabled?'badge-on':'badge-off'}">\${k.enabled?t('on'):t('off')}</span></td>
       <td style="white-space:nowrap">
@@ -893,39 +938,58 @@ function renderUsage() {
     container.innerHTML = '<div class="empty">' + t('noQuotaChannels') + '</div>';
     return;
   }
-  container.innerHTML = usageData.channels.map(ch => {
+
+  // 按有无用量排序：有用量的渠道排在前面
+  const sorted = [...usageData.channels].sort((a, b) => {
+    const aTotal = (a.keys || []).reduce((s, k) => s + (k.usage?.total || 0), 0);
+    const bTotal = (b.keys || []).reduce((s, k) => s + (k.usage?.total || 0), 0);
+    return bTotal - aTotal;
+  });
+
+  container.innerHTML = sorted.map(ch => {
     const statusDot = ch.enabled
       ? '<span style="width:8px;height:8px;border-radius:50%;background:var(--success);display:inline-block"></span>'
       : '<span style="width:8px;height:8px;border-radius:50%;background:var(--danger);display:inline-block"></span>';
 
-    const limitInfo = '<span style="color:var(--text-2);font-size:13px;font-weight:400">' +
-      t('dailyTotalLimit') + ': ' + (ch.quota_daily_total || '∞') +
-      ' · ' + t('dailyPerModelLimit') + ': ' + (ch.quota_daily_per_model || '∞') + '</span>';
+    // 配额徽章
+    const quotaBadge = ch.quota_enabled
+      ? '<span class="badge badge-on" style="font-size:11px;margin-left:8px">' + t('quotaEnabled') + '</span>'
+      : '<span class="badge" style="font-size:11px;margin-left:8px;background:rgba(113,113,122,.12);color:var(--text-2)">' + t('noQuota') + '</span>';
+
+    // 配额限制信息（仅对启用配额的渠道显示）
+    const limitInfo = ch.quota_enabled
+      ? '<span style="color:var(--text-2);font-size:13px;font-weight:400">' +
+        t('dailyTotalLimit') + ': ' + (ch.quota_daily_total || '∞') +
+        ' · ' + t('dailyPerModelLimit') + ': ' + (ch.quota_daily_per_model || '∞') + '</span>'
+      : '';
 
     const keyCards = (ch.keys || []).map(k => {
       const u = k.usage;
-      const totalPct = ch.quota_daily_total > 0
+      const hasQuota = ch.quota_enabled;
+
+      // 总量显示
+      const totalPct = hasQuota && ch.quota_daily_total > 0
         ? Math.min(100, Math.round(u.total / ch.quota_daily_total * 100))
         : 0;
       const totalClass = totalPct >= 90 ? 'progress-danger' : totalPct >= 70 ? 'progress-warn' : 'progress-ok';
-      const totalLabel = ch.quota_daily_total > 0
+      const totalLabel = hasQuota && ch.quota_daily_total > 0
         ? u.total + ' / ' + ch.quota_daily_total + '  (' + totalPct + '%)'
-        : u.total + ' (' + t('unlimited') + ')';
+        : String(u.total);
 
       const modelNames = Object.keys(u.models || {}).sort();
 
       const modelRows = modelNames.map(m => {
         const count = u.models[m] || 0;
-        const pct = ch.quota_daily_per_model > 0
+        const pct = hasQuota && ch.quota_daily_per_model > 0
           ? Math.min(100, Math.round(count / ch.quota_daily_per_model * 100))
           : 0;
         const cls = pct >= 90 ? 'progress-danger' : pct >= 70 ? 'progress-warn' : 'progress-ok';
-        const lbl = ch.quota_daily_per_model > 0
+        const lbl = hasQuota && ch.quota_daily_per_model > 0
           ? count + ' / ' + ch.quota_daily_per_model + '  (' + pct + '%)'
           : String(count);
         return '<div class="usage-row">' +
           '<div class="usage-label"><span style="font-family:monospace;font-size:12px">' + esc(m) + '</span><span class="usage-val">' + lbl + '</span></div>' +
-          '<div class="progress-bar"><div class="progress-fill ' + cls + '" style="width:' + (ch.quota_daily_per_model > 0 ? pct : Math.min(count / 5, 100)) + '%"></div></div>' +
+          '<div class="progress-bar"><div class="progress-fill ' + cls + '" style="width:' + (hasQuota && ch.quota_daily_per_model > 0 ? pct : Math.min(count / 5, 100)) + '%"></div></div>' +
           '</div>';
       }).join('');
 
@@ -933,7 +997,7 @@ function renderUsage() {
         '<div style="font-family:monospace;font-size:13px;color:var(--primary);margin-bottom:10px">' + esc(k.key_hint) + '</div>' +
         '<div class="usage-row">' +
           '<div class="usage-label"><span>' + t('totalUsage') + '</span><span class="usage-val">' + totalLabel + '</span></div>' +
-          '<div class="progress-bar"><div class="progress-fill ' + totalClass + '" style="width:' + (ch.quota_daily_total > 0 ? totalPct : Math.min(u.total / 20, 100)) + '%"></div></div>' +
+          '<div class="progress-bar"><div class="progress-fill ' + totalClass + '" style="width:' + (hasQuota && ch.quota_daily_total > 0 ? totalPct : Math.min(u.total / 20, 100)) + '%"></div></div>' +
         '</div>' +
         (modelRows
           ? '<div style="margin-top:12px"><div style="font-size:12px;color:var(--text-2);margin-bottom:8px;text-transform:uppercase;letter-spacing:.5px">' + t('perModelUsage') + '</div>' + modelRows + '</div>'
@@ -942,8 +1006,8 @@ function renderUsage() {
     }).join('');
 
     return '<div class="usage-card">' +
-      '<h4>' + statusDot + ' ' + esc(ch.channel_name) + '</h4>' +
-      '<div style="margin-bottom:14px">' + limitInfo + '</div>' +
+      '<h4>' + statusDot + ' ' + esc(ch.channel_name) + quotaBadge + '</h4>' +
+      (limitInfo ? '<div style="margin-bottom:14px">' + limitInfo + '</div>' : '') +
       keyCards +
     '</div>';
   }).join('');
@@ -1044,6 +1108,35 @@ function esc(s) {
 }
 function maskKey(k) { return k && k.length > 12 ? k.slice(0,7) + '...' + k.slice(-4) : k; }
 function fmtDate(d) { return d ? new Date(d).toLocaleDateString() : '-'; }
+function fmtNum(n) { return n >= 1000000 ? (n / 1000000).toFixed(1) + 'M' : n >= 1000 ? (n / 1000).toFixed(1) + 'K' : String(n); }
+function fmtCost(n) { return n >= 0.01 ? '$' + n.toFixed(2) : n > 0 ? '$' + n.toFixed(4) : '$0'; }
+
+// 模型定价（每百万 token 美元）
+const MODEL_PRICING = {
+  'gpt-4o':{i:2.5,o:10},'gpt-4o-mini':{i:.15,o:.6},'gpt-4-turbo':{i:10,o:30},'gpt-4':{i:30,o:60},
+  'gpt-3.5-turbo':{i:.5,o:1.5},'o1':{i:15,o:60},'o1-mini':{i:3,o:12},'o3-mini':{i:1.1,o:4.4},
+  'claude-opus-4':{i:15,o:75},'claude-sonnet-4':{i:3,o:15},'claude-3-7-sonnet':{i:3,o:15},
+  'claude-3-5-sonnet':{i:3,o:15},'claude-3-5-haiku':{i:.8,o:4},'claude-3-opus':{i:15,o:75},
+  'claude-3-sonnet':{i:3,o:15},'claude-3-haiku':{i:.25,o:1.25},
+  'deepseek-chat':{i:.14,o:.28},'deepseek-reasoner':{i:.55,o:2.19},
+  'gemini-2.0-flash':{i:.1,o:.4},'gemini-2.0-pro':{i:1.25,o:10},'gemini-1.5-pro':{i:1.25,o:5},'gemini-1.5-flash':{i:.075,o:.3},
+  'glm-4':{i:1,o:1},'glm-4-flash':{i:.01,o:.01},'glm-4-plus':{i:.5,o:.5},
+  'qwen-turbo':{i:.3,o:.6},'qwen-plus':{i:.8,o:2},'qwen-max':{i:2,o:6},
+};
+function calcCost(model, pt, ct) {
+  let p = MODEL_PRICING[model];
+  if (!p) { for (const [k,v] of Object.entries(MODEL_PRICING)) { if (model && model.startsWith(k)) { p = v; break; } } }
+  if (!p) return 0;
+  return (pt * p.i + ct * p.o) / 1e6;
+}
+function calcKeyTotalCost(usage) {
+  if (!usage || !usage.models) return 0;
+  let total = 0;
+  for (const [m, d] of Object.entries(usage.models)) {
+    total += calcCost(m, d.prompt_tokens || 0, d.completion_tokens || 0);
+  }
+  return total;
+}
 function copyKey(btn) { copyText(btn.dataset.key); }
 async function copyText(txt) {
   try { await navigator.clipboard.writeText(txt); toast(t('copied'), 'success'); }

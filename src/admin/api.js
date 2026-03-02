@@ -87,13 +87,12 @@ export async function handleAdminApi(request, env, store) {
       return jsonRes(channels[idx]);
     }
 
-    // --- Usage ---
+    // --- Usage (所有渠道，不再限制仅 quota_enabled) ---
     if (path === '/usage' && method === 'GET') {
       const date = url.searchParams.get('date') || new Date().toISOString().slice(0, 10);
       const channels = await store.getChannels();
-      const quotaChannels = channels.filter(ch => ch.quota_enabled);
       const usageData = await Promise.all(
-        quotaChannels.map(async ch => {
+        channels.map(async ch => {
           const rawUsage = await store.getUsage(ch.id, date);
           const keys = (ch.keys || []).map(k => {
             const kid = k.slice(-8);
@@ -108,13 +107,21 @@ export async function handleAdminApi(request, env, store) {
             channel_id: ch.id,
             channel_name: ch.name,
             enabled: ch.enabled,
-            quota_daily_total: ch.quota_daily_total,
-            quota_daily_per_model: ch.quota_daily_per_model,
+            quota_enabled: !!ch.quota_enabled,
+            quota_daily_total: ch.quota_daily_total || 0,
+            quota_daily_per_model: ch.quota_daily_per_model || 0,
             keys,
           };
         })
       );
       return jsonRes({ date, channels: usageData });
+    }
+
+    // --- API Key Usage (客户端密钥用量统计) ---
+    if (path === '/apikeys/usage' && method === 'GET') {
+      const date = url.searchParams.get('date') || new Date().toISOString().slice(0, 10);
+      const rawUsage = await store.getApiKeyUsage(date);
+      return jsonRes({ date, keys: rawUsage });
     }
 
     // --- Error Logs ---
