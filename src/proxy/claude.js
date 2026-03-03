@@ -88,17 +88,22 @@ function convertMessages(system, claudeMessages) {
       }
     }
 
-    // Text + tool_calls go into one message
-    if (texts.length > 0 || toolCalls.length > 0) {
+    // Tool results must come BEFORE text when in the same user message,
+    // because OpenAI requires tool responses immediately after the
+    // assistant's tool_calls — no other messages in between.
+    if (toolResults.length > 0) {
+      for (const tr of toolResults) {
+        msgs.push({ role: 'tool', tool_call_id: tr.tool_call_id, content: tr.content });
+      }
+      // Text in the same message goes as a separate user message after tool results
+      if (texts.length > 0) {
+        msgs.push({ role: 'user', content: texts.join('\n') });
+      }
+    } else if (texts.length > 0 || toolCalls.length > 0) {
       const m = { role: msg.role === 'assistant' ? 'assistant' : 'user' };
       if (texts.length > 0) m.content = texts.join('\n');
       if (toolCalls.length > 0) m.tool_calls = toolCalls;
       msgs.push(m);
-    }
-
-    // Each tool_result becomes a separate "tool" role message
-    for (const tr of toolResults) {
-      msgs.push({ role: 'tool', tool_call_id: tr.tool_call_id, content: tr.content });
     }
   }
 
