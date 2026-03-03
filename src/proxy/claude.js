@@ -57,14 +57,29 @@ function convertMessages(system, claudeMessages) {
     }
 
     // Array of content blocks
-    const texts = [];
+    const contentParts = [];  // OpenAI multimodal content parts
     const toolCalls = [];
     const toolResults = [];
 
     for (const block of msg.content) {
       switch (block.type) {
         case 'text':
-          texts.push(block.text);
+          contentParts.push({ type: 'text', text: block.text });
+          break;
+        case 'image':
+          // Claude base64 image → OpenAI image_url data URI
+          if (block.source?.type === 'base64' && block.source.data) {
+            const mime = block.source.media_type || 'image/png';
+            contentParts.push({
+              type: 'image_url',
+              image_url: { url: `data:${mime};base64,${block.source.data}` },
+            });
+          } else if (block.source?.type === 'url' && block.source.url) {
+            contentParts.push({
+              type: 'image_url',
+              image_url: { url: block.source.url },
+            });
+          }
           break;
         case 'tool_use':
           toolCalls.push({
@@ -84,9 +99,17 @@ function convertMessages(system, claudeMessages) {
               : JSON.stringify(block.content),
           });
           break;
-        // image_url etc. — skip unsupported types
       }
     }
+
+    // Build content value: use simple string when text-only, array when multimodal
+    const hasImages = contentParts.some(p => p.type === 'image_url');
+    const textOnly = contentParts.filter(p => p.type === 'text');
+    const contentValue = hasImages
+      ? contentParts
+      : textOnly.length > 0
+        ? textOnly.map(p => p.text).join('\n')
+        : null;
 
     // Tool results must come BEFORE text when in the same user message,
     // because OpenAI requires tool responses immediately after the
@@ -95,13 +118,12 @@ function convertMessages(system, claudeMessages) {
       for (const tr of toolResults) {
         msgs.push({ role: 'tool', tool_call_id: tr.tool_call_id, content: tr.content });
       }
-      // Text in the same message goes as a separate user message after tool results
-      if (texts.length > 0) {
-        msgs.push({ role: 'user', content: texts.join('\n') });
+      if (contentValue) {
+        msgs.push({ role: 'user', content: contentValue });
       }
-    } else if (texts.length > 0 || toolCalls.length > 0) {
+    } else if (contentValue || toolCalls.length > 0) {
       const m = { role: msg.role === 'assistant' ? 'assistant' : 'user' };
-      if (texts.length > 0) m.content = texts.join('\n');
+      if (contentValue) m.content = contentValue;
       if (toolCalls.length > 0) m.tool_calls = toolCalls;
       msgs.push(m);
     }
