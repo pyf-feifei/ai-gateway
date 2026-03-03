@@ -120,7 +120,8 @@ function convertInputItem(item) {
         content = parts.length === 1 && parts[0].type === 'text' ? parts[0].text : parts;
       }
       if (!content || (Array.isArray(content) && content.length === 0)) return null;
-      return { role: item.role, content };
+      const role = item.role === 'developer' ? 'system' : item.role;
+      return { role, content };
     }
 
     case 'function_call':
