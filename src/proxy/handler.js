@@ -1,6 +1,7 @@
 import { verifyApiKey } from './auth.js';
 import { LoadBalancer } from '../lb/balancer.js';
 import { claudeToOpenAI, openAIToClaude, openAIStreamToClaudeStream } from './claude.js';
+import { responsesToChatCompletions, chatCompletionsToResponses, chatCompletionsStreamToResponsesStream } from './responses.js';
 
 export async function handleProxy(request, env, store) {
   // Verify client API key
@@ -37,6 +38,11 @@ export async function handleProxy(request, env, store) {
   // ---- Claude Messages API (/v1/messages) ----
   if (path.endsWith('/messages')) {
     return handleClaudeMessages(request, url, body, store, allowedChannelIds, clientKeyId);
+  }
+
+  // ---- OpenAI Responses API (/v1/responses) ----
+  if (path.endsWith('/responses')) {
+    return handleResponses(request, url, body, store, allowedChannelIds, clientKeyId);
   }
 
   // ---- OpenAI-compatible passthrough ----
@@ -175,6 +181,129 @@ async function handleClaudeMessages(request, url, claudeBody, store, allowedChan
   }
 
   return claudeErrorRes(`All targets failed. Last error: ${lastError}`, 502);
+}
+
+// ─── OpenAI Responses API handler ──────────────────────────────────
+
+async function handleResponses(request, url, body, store, allowedChannelIds, clientKeyId) {
+  const model = body.model || '';
+  const isStream = body.stream || false;
+
+  const openaiBody = responsesToChatCompletions(body);
+
+  if (isStream) {
+    openaiBody.stream_options = { include_usage: true };
+  }
+
+  const lb = new LoadBalancer(store);
+  const { targets, error } = await lb.selectTarget(model, allowedChannelIds);
+
+  if (error || targets.length === 0) {
+    return responsesErrorRes(error || 'No available channel for model: ' + model, 503);
+  }
+
+  let lastError = null;
+  for (const target of targets) {
+    try {
+      const baseUrl = target.channel.base_url.replace(/\/+$/, '');
+      const targetUrl = baseUrl + '/chat/completions' + url.search;
+
+      console.log(`[proxy][responses] -> ${target.channel.name} ${targetUrl}`);
+
+      const headers = new Headers();
+      headers.set('Content-Type', 'application/json');
+      headers.set('Authorization', `Bearer ${target.key}`);
+      if (isStream) headers.set('Accept', 'text/event-stream');
+
+      const resp = await fetch(targetUrl, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(openaiBody),
+      });
+
+      if (resp.status === 404) {
+        lastError = `HTTP 404 (model not found)`;
+        logError(store, target, model, 404, lastError);
+        continue;
+      }
+
+      if (resp.status === 429) {
+        lastError = `HTTP 429 (rate limited)`;
+        logError(store, target, model, 429, lastError);
+        store.markRateLimited(target.channel.id, target.key, model).catch(e =>
+          console.error('[ratelimit] mark failed:', e)
+        );
+        continue;
+      }
+
+      if (resp.ok || resp.status < 500) {
+        if (!resp.ok) {
+          const errBody = await resp.text();
+          logError(store, target, model, resp.status, errBody);
+          return responsesErrorRes(`Upstream error: ${errBody}`, resp.status);
+        }
+
+        const upstreamIsSSE = isStream &&
+          (resp.headers.get('Content-Type') || '').includes('text/event-stream');
+
+        if (upstreamIsSSE) {
+          store.incrementUsage(target.channel.id, target.key, model).catch(e =>
+            console.error('[usage] increment failed:', e));
+
+          const { stream, usagePromise } = chatCompletionsStreamToResponsesStream(resp.body, model);
+
+          usagePromise.then(usage => {
+            const pt = usage?.prompt_tokens || 0;
+            const ct = usage?.completion_tokens || 0;
+            store.incrementApiKeyUsage(clientKeyId, model, pt, ct).catch(e =>
+              console.error('[apikey-usage] increment failed:', e));
+          }).catch(() => {
+            store.incrementApiKeyUsage(clientKeyId, model, 0, 0).catch(() => {});
+          });
+
+          return new Response(stream, {
+            status: 200,
+            headers: {
+              'Content-Type': 'text/event-stream',
+              'Cache-Control': 'no-cache',
+              'Connection': 'keep-alive',
+              'X-Accel-Buffering': 'no',
+              'Access-Control-Allow-Origin': '*',
+            },
+          });
+        }
+
+        if (isStream) {
+          console.warn(`[proxy][responses] upstream returned non-SSE for stream:true (Content-Type: ${resp.headers.get('Content-Type')}), falling back to non-streaming`);
+        }
+
+        const openaiData = await resp.json();
+        if (!Array.isArray(openaiData.choices)) {
+          lastError = `upstream returned invalid response (choices=${openaiData.choices})`;
+          logError(store, target, model, 200, lastError);
+          continue;
+        }
+
+        const pt = openaiData.usage?.prompt_tokens || 0;
+        const ct = openaiData.usage?.completion_tokens || 0;
+        store.incrementUsage(target.channel.id, target.key, model).catch(e =>
+          console.error('[usage] increment failed:', e));
+        store.incrementApiKeyUsage(clientKeyId, model, pt, ct).catch(e =>
+          console.error('[apikey-usage] increment failed:', e));
+
+        const responsesData = chatCompletionsToResponses(openaiData, model);
+        return jsonRes(responsesData, 200);
+      }
+
+      lastError = `HTTP ${resp.status}`;
+      logError(store, target, model, resp.status, lastError);
+    } catch (err) {
+      lastError = err.message;
+      logError(store, target, model, 0, lastError);
+    }
+  }
+
+  return responsesErrorRes(`All targets failed. Last error: ${lastError}`, 502);
 }
 
 // ─── OpenAI passthrough handler ────────────────────────────────────
@@ -411,6 +540,27 @@ function logError(store, target, model, status, message) {
   store.appendError(target.channel.id, {
     model, status, message: String(message).slice(0, 200), key_hint: hint,
   }).catch(e => console.error('[errorlog] write failed:', e));
+}
+
+function responsesErrorRes(message, status = 500) {
+  return new Response(JSON.stringify({
+    id: 'resp_err_' + Date.now(),
+    object: 'response',
+    created_at: Math.floor(Date.now() / 1000),
+    status: 'failed',
+    error: {
+      code: 'server_error',
+      message,
+    },
+    output: [],
+    usage: null,
+  }), {
+    status,
+    headers: {
+      'Content-Type': 'application/json',
+      'Access-Control-Allow-Origin': '*',
+    },
+  });
 }
 
 function claudeErrorRes(message, status = 500) {
