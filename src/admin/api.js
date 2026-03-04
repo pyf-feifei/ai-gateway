@@ -94,13 +94,33 @@ export async function handleAdminApi(request, env, store) {
       const usageData = await Promise.all(
         channels.map(async ch => {
           const rawUsage = await store.getUsage(ch.id, date);
+          const rawRate = await store.getRateLimits(ch.id, date);
           const keys = (ch.keys || []).map(k => {
             const kid = k.slice(-8);
             const usage = rawUsage[kid] || { total: 0, models: {} };
+            const rateInfo = store.getRateLimitInfoWithData(k, rawRate);
+            const upstreamTotalLimit = Number.isFinite(rateInfo?.header?.user_limit) ? rateInfo.header.user_limit : 0;
+            const upstreamModelLimits = {};
+            for (const [m, d] of Object.entries(rateInfo?.header?.model_limits || {})) {
+              if (Number.isFinite(d?.limit) && d.limit > 0) upstreamModelLimits[m] = d.limit;
+            }
+            const fallbackTotalLimit = ch.quota_enabled ? (ch.quota_daily_total || 0) : 0;
+            const fallbackModelLimit = ch.quota_enabled ? (ch.quota_daily_per_model || 0) : 0;
             return {
               key_id: kid,
               key_hint: k.length > 12 ? k.slice(0, 7) + '...' + k.slice(-4) : k,
               usage,
+              limits: {
+                total_limit: upstreamTotalLimit > 0 ? upstreamTotalLimit : fallbackTotalLimit,
+                total_source: upstreamTotalLimit > 0 ? 'upstream' : (fallbackTotalLimit > 0 ? 'channel' : 'none'),
+                default_model_limit: fallbackModelLimit,
+                model_limits: upstreamModelLimits,
+                model_source: Object.keys(upstreamModelLimits).length > 0 ? 'upstream' : (fallbackModelLimit > 0 ? 'channel' : 'none'),
+              },
+              rate_state: {
+                daily_models: rateInfo?.daily_models || [],
+                cooldowns: rateInfo?.cooldowns || {},
+              },
             };
           });
           return {

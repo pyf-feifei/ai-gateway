@@ -80,15 +80,12 @@ export class LoadBalancer {
     // Pre-load usage data and rate-limit data in parallel
     const usageMap = new Map();
     const rateLimitMap = new Map();
-    const quotaChannels = compatible.filter(ch => ch.quota_enabled);
-
     const preloadTasks = [];
-    if (quotaChannels.length > 0) {
-      for (const ch of quotaChannels) {
-        preloadTasks.push(
-          this.store.getUsage(ch.id).then(d => usageMap.set(ch.id, d))
-        );
-      }
+    // Usage is needed for both upstream header-based limits and local fallback quota.
+    for (const ch of compatible) {
+      preloadTasks.push(
+        this.store.getUsage(ch.id).then(d => usageMap.set(ch.id, d))
+      );
     }
     for (const ch of compatible) {
       preloadTasks.push(
@@ -126,10 +123,8 @@ export class LoadBalancer {
     const targets = allTargets.filter(t => {
       const rlData = rateLimitMap.get(t.channel.id) || {};
       if (this.store.isRateLimitedWithData(t.key, model, rlData)) return false;
-
-      if (!t.channel.quota_enabled) return true;
       const usageData = usageMap.get(t.channel.id) || {};
-      return this.store.checkQuotaWithData(t.channel, t.key, model, usageData).allowed;
+      return this.store.checkQuotaWithData(t.channel, t.key, model, usageData, rlData).allowed;
     });
 
     if (targets.length === 0 && allTargets.length > 0) {

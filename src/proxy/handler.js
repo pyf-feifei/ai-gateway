@@ -89,6 +89,12 @@ async function handleClaudeMessages(request, url, claudeBody, store, allowedChan
         headers,
         body: JSON.stringify(openaiBody),
       });
+      const rateHeaders = extractRateLimitHeaders(resp.headers);
+      if (rateHeaders.hasAny) {
+        store.updateRateLimitHeaders(target.channel.id, target.key, model, rateHeaders).catch(e =>
+          console.error('[ratelimit] update headers failed:', e)
+        );
+      }
 
       if (resp.status === 404) {
         lastError = `HTTP 404 (model not found)`;
@@ -98,10 +104,8 @@ async function handleClaudeMessages(request, url, claudeBody, store, allowedChan
 
       if (resp.status === 429) {
         lastError = `HTTP 429 (rate limited)`;
-        logError(store, target, model, 429, lastError);
-        store.markRateLimited(target.channel.id, target.key, model).catch(e =>
-          console.error('[ratelimit] mark failed:', e)
-        );
+        const rlReason = await classifyAndRecord429(store, target, model, resp, rateHeaders);
+        logError(store, target, model, 429, `${lastError}${rlReason ? `: ${rlReason}` : ''}`);
         continue;
       }
 
@@ -118,6 +122,7 @@ async function handleClaudeMessages(request, url, claudeBody, store, allowedChan
           (resp.headers.get('Content-Type') || '').includes('text/event-stream');
 
         if (upstreamIsSSE) {
+          store.clearRateLimitCooldown(target.channel.id, target.key, model).catch(() => {});
           // 渠道用量立即记录（仅计数）
           store.incrementUsage(target.channel.id, target.key, model).catch(e =>
             console.error('[usage] increment failed:', e));
@@ -169,6 +174,7 @@ async function handleClaudeMessages(request, url, claudeBody, store, allowedChan
           console.error('[apikey-usage] increment failed:', e));
 
         const claudeResponse = openAIToClaude(openaiData, model);
+        store.clearRateLimitCooldown(target.channel.id, target.key, model).catch(() => {});
         return jsonRes(claudeResponse, 200);
       }
 
@@ -220,6 +226,12 @@ async function handleResponses(request, url, body, store, allowedChannelIds, cli
         headers,
         body: JSON.stringify(openaiBody),
       });
+      const rateHeaders = extractRateLimitHeaders(resp.headers);
+      if (rateHeaders.hasAny) {
+        store.updateRateLimitHeaders(target.channel.id, target.key, model, rateHeaders).catch(e =>
+          console.error('[ratelimit] update headers failed:', e)
+        );
+      }
 
       if (resp.status === 404) {
         lastError = `HTTP 404 (model not found)`;
@@ -229,10 +241,8 @@ async function handleResponses(request, url, body, store, allowedChannelIds, cli
 
       if (resp.status === 429) {
         lastError = `HTTP 429 (rate limited)`;
-        logError(store, target, model, 429, lastError);
-        store.markRateLimited(target.channel.id, target.key, model).catch(e =>
-          console.error('[ratelimit] mark failed:', e)
-        );
+        const rlReason = await classifyAndRecord429(store, target, model, resp, rateHeaders);
+        logError(store, target, model, 429, `${lastError}${rlReason ? `: ${rlReason}` : ''}`);
         continue;
       }
 
@@ -247,6 +257,7 @@ async function handleResponses(request, url, body, store, allowedChannelIds, cli
           (resp.headers.get('Content-Type') || '').includes('text/event-stream');
 
         if (upstreamIsSSE) {
+          store.clearRateLimitCooldown(target.channel.id, target.key, model).catch(() => {});
           store.incrementUsage(target.channel.id, target.key, model).catch(e =>
             console.error('[usage] increment failed:', e));
 
@@ -292,6 +303,7 @@ async function handleResponses(request, url, body, store, allowedChannelIds, cli
           console.error('[apikey-usage] increment failed:', e));
 
         const responsesData = chatCompletionsToResponses(openaiData, model);
+        store.clearRateLimitCooldown(target.channel.id, target.key, model).catch(() => {});
         return jsonRes(responsesData, 200);
       }
 
@@ -350,6 +362,12 @@ async function handleOpenAIProxy(request, url, path, body, store, allowedChannel
         headers,
         body: JSON.stringify(body),
       });
+      const rateHeaders = extractRateLimitHeaders(resp.headers);
+      if (rateHeaders.hasAny) {
+        store.updateRateLimitHeaders(target.channel.id, target.key, model, rateHeaders).catch(e =>
+          console.error('[ratelimit] update headers failed:', e)
+        );
+      }
 
       if (resp.status === 404) {
         lastError = `HTTP 404 (model not found)`;
@@ -359,10 +377,8 @@ async function handleOpenAIProxy(request, url, path, body, store, allowedChannel
 
       if (resp.status === 429) {
         lastError = `HTTP 429 (rate limited)`;
-        logError(store, target, model, 429, lastError);
-        store.markRateLimited(target.channel.id, target.key, model).catch(e =>
-          console.error('[ratelimit] mark failed:', e)
-        );
+        const rlReason = await classifyAndRecord429(store, target, model, resp, rateHeaders);
+        logError(store, target, model, 429, `${lastError}${rlReason ? `: ${rlReason}` : ''}`);
         continue;
       }
 
@@ -382,6 +398,7 @@ async function handleOpenAIProxy(request, url, path, body, store, allowedChannel
           (ct || '').includes('text/event-stream');
 
         if (upstreamIsSSE) {
+          store.clearRateLimitCooldown(target.channel.id, target.key, model).catch(() => {});
           // 禁用 nginx 缓冲（HF Spaces 必须），否则代理会缓冲整个流导致 ECONNRESET
           respHeaders.set('Content-Type', 'text/event-stream');
           respHeaders.set('Cache-Control', 'no-cache');
@@ -433,6 +450,7 @@ async function handleOpenAIProxy(request, url, path, body, store, allowedChannel
             console.error('[usage] increment failed:', e));
           store.incrementApiKeyUsage(clientKeyId, model, promptTokens, completionTokens).catch(e =>
             console.error('[apikey-usage] increment failed:', e));
+          store.clearRateLimitCooldown(target.channel.id, target.key, model).catch(() => {});
           return new Response(respText, { status: resp.status, headers: respHeaders });
         }
 
@@ -442,6 +460,7 @@ async function handleOpenAIProxy(request, url, path, body, store, allowedChannel
             console.error('[usage] increment failed:', e));
           store.incrementApiKeyUsage(clientKeyId, model, 0, 0).catch(e =>
             console.error('[apikey-usage] increment failed:', e));
+          store.clearRateLimitCooldown(target.channel.id, target.key, model).catch(() => {});
         }
 
         return new Response(resp.body, { status: resp.status, headers: respHeaders });
@@ -523,6 +542,67 @@ async function handleModels(store, allowedChannelIds) {
       owned_by: m.owned_by,
     })),
   });
+}
+
+function extractRateLimitHeaders(headers) {
+  const intOrNull = (v) => {
+    if (v == null) return null;
+    const n = parseInt(v, 10);
+    return Number.isFinite(n) ? n : null;
+  };
+  const info = {
+    user_limit: intOrNull(headers.get('modelscope-ratelimit-requests-limit')),
+    user_remaining: intOrNull(headers.get('modelscope-ratelimit-requests-remaining')),
+    model_limit: intOrNull(headers.get('modelscope-ratelimit-model-requests-limit')),
+    model_remaining: intOrNull(headers.get('modelscope-ratelimit-model-requests-remaining')),
+    retry_after: intOrNull(headers.get('retry-after')),
+  };
+  info.hasAny =
+    info.user_limit !== null ||
+    info.user_remaining !== null ||
+    info.model_limit !== null ||
+    info.model_remaining !== null ||
+    info.retry_after !== null;
+  return info;
+}
+
+async function classifyAndRecord429(store, target, model, resp, rateHeaders) {
+  let errText = '';
+  try { errText = await resp.text(); } catch { errText = ''; }
+
+  let code = '';
+  let message = errText;
+  try {
+    const data = JSON.parse(errText || '{}');
+    code = String(data?.error?.code || data?.errors?.code || '').toLowerCase();
+    message = String(data?.error?.message || data?.errors?.message || errText || '');
+  } catch {
+    code = '';
+  }
+
+  const msg = message.toLowerCase();
+  const modelRemaining = Number.isFinite(rateHeaders?.model_remaining) ? rateHeaders.model_remaining : null;
+  const userRemaining = Number.isFinite(rateHeaders?.user_remaining) ? rateHeaders.user_remaining : null;
+
+  if ((modelRemaining !== null && modelRemaining <= 0) || (userRemaining !== null && userRemaining <= 0)) {
+    await store.markRateLimited(target.channel.id, target.key, model);
+    return 'daily quota exhausted';
+  }
+
+  const isBurst = code.includes('limit_burst_rate') || msg.includes('increased too quickly');
+  const isRequests = code.includes('limit_requests') || msg.includes('rate limit') || msg.includes('rate limited');
+  const retryAfterMs = (Number.isFinite(rateHeaders?.retry_after) && rateHeaders.retry_after > 0)
+    ? rateHeaders.retry_after * 1000
+    : null;
+  const cooldownMs = retryAfterMs || (isBurst ? 45 * 1000 : 90 * 1000);
+
+  if (isBurst || isRequests) {
+    await store.markRateLimitedTemporary(target.channel.id, target.key, model, cooldownMs);
+    return `temporary cooldown ${Math.ceil(cooldownMs / 1000)}s`;
+  }
+
+  await store.markRateLimitedTemporary(target.channel.id, target.key, model, 90 * 1000);
+  return 'temporary cooldown 90s';
 }
 
 function jsonRes(body, status = 200) {

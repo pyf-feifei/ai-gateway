@@ -362,6 +362,11 @@ const I18N = {
     errorKey: 'Key',
     errorsToday: 'errors today',
     keysTotal: 'keys',
+    cooldown: 'Cooldown',
+    limitSource: 'Limit Source',
+    sourceUpstream: 'Upstream',
+    sourceChannel: 'Channel fallback',
+    sourceNone: 'None',
   },
   zh: {
     loginSub: '请输入管理员密码或 API Key 继续',
@@ -478,6 +483,11 @@ const I18N = {
     errorKey: '密钥',
     errorsToday: '个错误',
     keysTotal: '个密钥',
+    cooldown: '冷却倒计时',
+    limitSource: '限额来源',
+    sourceUpstream: '上游实时',
+    sourceChannel: '渠道兜底',
+    sourceNone: '无',
   },
 };
 
@@ -590,6 +600,7 @@ function renderSidebar() {
 }
 
 function navigate(section) {
+  if (section !== 'usage') syncUsageCooldownTicker(false);
   curSection = section;
   document.querySelectorAll('.nav-item').forEach(el => {
     el.classList.toggle('active', el.dataset.section === section);
@@ -925,6 +936,28 @@ async function saveEditAk(id) {
 let usageData = null;
 const USAGE_PAGE_SIZE = 10;
 const usageKeyPages = {};  // { channelId: currentPage(从1开始) }
+let usageCooldownTicker = null;
+
+function formatCooldownLeft(untilMs) {
+  const sec = Math.max(0, Math.ceil((untilMs - Date.now()) / 1000));
+  return sec + 's';
+}
+
+function syncUsageCooldownTicker(hasActiveCooldown) {
+  if (hasActiveCooldown) {
+    if (!usageCooldownTicker) {
+      usageCooldownTicker = setInterval(() => {
+        if (curSection !== 'usage' || !usageData) return;
+        renderUsage();
+      }, 1000);
+    }
+    return;
+  }
+  if (usageCooldownTicker) {
+    clearInterval(usageCooldownTicker);
+    usageCooldownTicker = null;
+  }
+}
 
 function renderUsageHeaders() {
   document.getElementById('usage-title').textContent = t('usageMonitor');
@@ -948,6 +981,7 @@ function renderUsage() {
   const container = document.getElementById('usage-container');
   if (!usageData || !usageData.channels || usageData.channels.length === 0) {
     container.innerHTML = '<div class="empty">' + t('noQuotaChannels') + '</div>';
+    syncUsageCooldownTicker(false);
     return;
   }
 
@@ -958,6 +992,7 @@ function renderUsage() {
     return bTotal - aTotal;
   });
 
+  let hasAnyActiveCooldown = false;
   container.innerHTML = sorted.map(ch => {
     const statusDot = ch.enabled
       ? '<span style="width:8px;height:8px;border-radius:50%;background:var(--success);display:inline-block"></span>'
@@ -968,12 +1003,11 @@ function renderUsage() {
       ? '<span class="badge badge-on" style="font-size:11px;margin-left:8px">' + t('quotaEnabled') + '</span>'
       : '<span class="badge" style="font-size:11px;margin-left:8px;background:rgba(113,113,122,.12);color:var(--text-2)">' + t('noQuota') + '</span>';
 
-    // 配额限制信息（仅对启用配额的渠道显示）
-    const limitInfo = ch.quota_enabled
-      ? '<span style="color:var(--text-2);font-size:13px;font-weight:400">' +
-        t('dailyTotalLimit') + ': ' + (ch.quota_daily_total || '∞') +
-        ' · ' + t('dailyPerModelLimit') + ': ' + (ch.quota_daily_per_model || '∞') + '</span>'
-      : '';
+    // 配额限制信息（渠道配置为本地兜底）
+    const limitInfo = '<span style="color:var(--text-2);font-size:13px;font-weight:400">' +
+      t('dailyTotalLimit') + ': ' + (ch.quota_enabled && ch.quota_daily_total > 0 ? ch.quota_daily_total : '∞') +
+      ' · ' + t('dailyPerModelLimit') + ': ' + (ch.quota_enabled && ch.quota_daily_per_model > 0 ? ch.quota_daily_per_model : '∞') +
+      '</span>';
 
     const allKeys = ch.keys || [];
     const totalKeys = allKeys.length;
@@ -986,39 +1020,72 @@ function renderUsage() {
 
     const keyCards = pageKeys.map(k => {
       const u = k.usage;
-      const hasQuota = ch.quota_enabled;
+      const limits = k.limits || {};
+      const rateState = k.rate_state || {};
+      const cooldowns = rateState.cooldowns || {};
+      const activeCooldownItems = Object.entries(cooldowns)
+        .filter(([, until]) => Number(until) > Date.now())
+        .sort((a, b) => Number(a[1]) - Number(b[1]));
+      if (activeCooldownItems.length > 0) hasAnyActiveCooldown = true;
+
+      const totalLimit = limits.total_limit || 0;
+      const hasTotalLimit = totalLimit > 0;
+      const totalSource = limits.total_source || 'none';
+      const sourceText = totalSource === 'upstream'
+        ? t('sourceUpstream')
+        : totalSource === 'channel'
+          ? t('sourceChannel')
+          : t('sourceNone');
+      const cooldownHtml = activeCooldownItems.length > 0
+        ? '<div style="margin:8px 0 12px 0;font-size:12px;color:#b45309;background:#fffbeb;border:1px solid #fcd34d;border-radius:6px;padding:8px">' +
+            '<div style="font-weight:600;margin-bottom:4px">' + t('cooldown') + '</div>' +
+            activeCooldownItems.map(([m, until]) => {
+              const modelTag = m === '*' ? 'all' : esc(m);
+              return '<div style="display:flex;justify-content:space-between;gap:8px">' +
+                '<span style="font-family:monospace">' + modelTag + '</span>' +
+                '<span>' + formatCooldownLeft(Number(until)) + '</span>' +
+              '</div>';
+            }).join('') +
+          '</div>'
+        : '';
 
       // 总量显示
-      const totalPct = hasQuota && ch.quota_daily_total > 0
-        ? Math.min(100, Math.round(u.total / ch.quota_daily_total * 100))
+      const totalPct = hasTotalLimit
+        ? Math.min(100, Math.round(u.total / totalLimit * 100))
         : 0;
       const totalClass = totalPct >= 90 ? 'progress-danger' : totalPct >= 70 ? 'progress-warn' : 'progress-ok';
-      const totalLabel = hasQuota && ch.quota_daily_total > 0
-        ? u.total + ' / ' + ch.quota_daily_total + '  (' + totalPct + '%)'
+      const totalLabel = hasTotalLimit
+        ? u.total + ' / ' + totalLimit + '  (' + totalPct + '%)'
         : String(u.total);
 
       const modelNames = Object.keys(u.models || {}).sort();
 
       const modelRows = modelNames.map(m => {
         const count = u.models[m] || 0;
-        const pct = hasQuota && ch.quota_daily_per_model > 0
-          ? Math.min(100, Math.round(count / ch.quota_daily_per_model * 100))
+        const upstreamLimit = limits.model_limits && Number.isFinite(limits.model_limits[m]) ? limits.model_limits[m] : 0;
+        const fallbackLimit = Number.isFinite(limits.default_model_limit) ? limits.default_model_limit : 0;
+        const modelLimit = upstreamLimit > 0 ? upstreamLimit : fallbackLimit;
+        const hasModelLimit = modelLimit > 0;
+        const pct = hasModelLimit
+          ? Math.min(100, Math.round(count / modelLimit * 100))
           : 0;
         const cls = pct >= 90 ? 'progress-danger' : pct >= 70 ? 'progress-warn' : 'progress-ok';
-        const lbl = hasQuota && ch.quota_daily_per_model > 0
-          ? count + ' / ' + ch.quota_daily_per_model + '  (' + pct + '%)'
+        const lbl = hasModelLimit
+          ? count + ' / ' + modelLimit + '  (' + pct + '%)'
           : String(count);
         return '<div class="usage-row">' +
           '<div class="usage-label"><span style="font-family:monospace;font-size:12px">' + esc(m) + '</span><span class="usage-val">' + lbl + '</span></div>' +
-          '<div class="progress-bar"><div class="progress-fill ' + cls + '" style="width:' + (hasQuota && ch.quota_daily_per_model > 0 ? pct : Math.min(count / 5, 100)) + '%"></div></div>' +
+          '<div class="progress-bar"><div class="progress-fill ' + cls + '" style="width:' + (hasModelLimit ? pct : Math.min(count / 5, 100)) + '%"></div></div>' +
           '</div>';
       }).join('');
 
       return '<div style="background:var(--bg-1);border:1px solid var(--border);border-radius:6px;padding:16px;margin-bottom:10px">' +
         '<div style="font-family:monospace;font-size:13px;color:var(--primary);margin-bottom:10px">' + esc(k.key_hint) + '</div>' +
+        '<div style="font-size:12px;color:var(--text-2);margin-bottom:8px">' + t('limitSource') + ': ' + sourceText + '</div>' +
+        cooldownHtml +
         '<div class="usage-row">' +
           '<div class="usage-label"><span>' + t('totalUsage') + '</span><span class="usage-val">' + totalLabel + '</span></div>' +
-          '<div class="progress-bar"><div class="progress-fill ' + totalClass + '" style="width:' + (hasQuota && ch.quota_daily_total > 0 ? totalPct : Math.min(u.total / 20, 100)) + '%"></div></div>' +
+          '<div class="progress-bar"><div class="progress-fill ' + totalClass + '" style="width:' + (hasTotalLimit ? totalPct : Math.min(u.total / 20, 100)) + '%"></div></div>' +
         '</div>' +
         (modelRows
           ? '<div style="margin-top:12px"><div style="font-size:12px;color:var(--text-2);margin-bottom:8px;text-transform:uppercase;letter-spacing:.5px">' + t('perModelUsage') + '</div>' + modelRows + '</div>'
@@ -1059,6 +1126,7 @@ function renderUsage() {
       paginationHtml +
     '</div>';
   }).join('');
+  syncUsageCooldownTicker(hasAnyActiveCooldown);
 }
 
 // 分页跳转
