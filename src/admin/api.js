@@ -205,6 +205,75 @@ export async function handleAdminApi(request, env, store) {
       }
     }
 
+    // --- Test Upstream Connectivity (diagnostic) ---
+    if (path === '/test-upstream' && method === 'POST') {
+      const data = await request.json();
+      const channels = await store.getChannels();
+      const channelId = data.channel_id;
+      const model = data.model || '';
+
+      const testChannels = channelId
+        ? channels.filter(ch => ch.id === channelId)
+        : channels.filter(ch => ch.enabled && ch.keys?.length > 0);
+
+      if (testChannels.length === 0) {
+        return jsonRes({ error: 'No matching channels found' }, 404);
+      }
+
+      const results = [];
+      for (const ch of testChannels) {
+        for (const key of (ch.keys || [])) {
+          const keyHint = key.length > 12 ? key.slice(0, 7) + '...' + key.slice(-4) : key;
+          const baseUrl = ch.base_url.replace(/\/+$/, '');
+          const testUrl = baseUrl + '/chat/completions';
+          const start = Date.now();
+          try {
+            const resp = await fetch(testUrl, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${key}`,
+              },
+              body: JSON.stringify({
+                model: model || 'gpt-3.5-turbo',
+                messages: [{ role: 'user', content: 'say ok' }],
+                max_tokens: 3,
+              }),
+            });
+            const duration = Date.now() - start;
+            const rateHeaders = {};
+            for (const h of ['modelscope-ratelimit-requests-limit', 'modelscope-ratelimit-requests-remaining',
+              'modelscope-ratelimit-model-requests-limit', 'modelscope-ratelimit-model-requests-remaining',
+              'retry-after', 'x-ratelimit-limit-requests', 'x-ratelimit-remaining-requests']) {
+              const v = resp.headers.get(h);
+              if (v != null) rateHeaders[h] = v;
+            }
+            let body = '';
+            try { body = (await resp.text()).slice(0, 300); } catch {}
+            results.push({
+              channel: ch.name, channel_id: ch.id, key_hint: keyHint,
+              status: resp.status, duration_ms: duration,
+              rate_headers: rateHeaders, body,
+            });
+          } catch (err) {
+            results.push({
+              channel: ch.name, channel_id: ch.id, key_hint: keyHint,
+              status: 0, duration_ms: Date.now() - start,
+              error: err.message,
+            });
+          }
+          await new Promise(r => setTimeout(r, 1000));
+        }
+      }
+
+      const count429 = results.filter(r => r.status === 429).length;
+      const count200 = results.filter(r => r.status === 200).length;
+      return jsonRes({
+        summary: { total: results.length, ok: count200, rate_limited: count429 },
+        results,
+      });
+    }
+
     return jsonRes({ error: 'Not found' }, 404);
   } catch (err) {
     console.error('Admin API error:', err);
